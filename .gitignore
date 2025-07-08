@@ -2,3 +2,4 @@
 *.hdf5
 *.log
 *.ipynb_checkpoints
+./notebooks/ics_example/trees/pchtrees
