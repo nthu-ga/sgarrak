@@ -248,7 +248,7 @@ def halo_mah_to_zhao_c_nfw(mass, t_age_gyr):
 
 
 ############################################################
-def evolve_orbit(host, prog, tsteps, 
+def evolve_orbit(host, prog, tsteps=None, 
                  evolve_prog_mass=False, 
                  evolve_past_res_limits=False):
     """
@@ -303,13 +303,27 @@ def evolve_orbit(host, prog, tsteps,
     # Hence evolution for istep = 1 assumes the host properites to be those at istep = 0
     
     # The timesteps need not be the same as the tree levels (substepping)
-    # Interpolate timesteps (t=0 at infall) onto grid of tree levels
+   
+    # This is the time coordinate of each host level after the initial level, measured from the same
+    # t=0 as the orbit evolution timesteps and increasing forwards in time towards the root node.
+    host_times_starting_from_initial_level = (host.t_age[:initial_level+1] - host.t_age[initial_level])
     
-    host_times_starting_from_initial_level = host.t_age[:initial_level+1] - host.t_age[initial_level]
-    
-    # Find the tree level for each timestep.
-    levels_at_tstep = np.searchsorted(host_times_starting_from_initial_level,tsteps,side='right') - 1
-    
+    # We need to reverse the above, so that the first element corresponds to the infall time 
+    # rather than the root of the tree.
+    host_times_starting_from_initial_level = host_times_starting_from_initial_level[::-1]
+
+    # Find the reference tree level for each timestep.
+    if tsteps is None:
+        tsteps = host_times_starting_from_initial_level
+        # The reversal is because tree level zero is the root of the tree, not the infall
+        # time.
+        levels_at_tstep = np.linspace(0,initial_level,initial_level+1,dtype=int)[::-1]        
+    else:
+        # Interpolate timesteps (t=0 at infall, idx=0) onto grid of tree levels
+        # The reversal is because tree level zero is the root of the tree, not the infall
+        # time.
+        levels_at_tstep = prog.level - (np.searchsorted(host_times_starting_from_initial_level,tsteps,side='right')-1)
+
     if cfg.Mres is None:
         mres_effective = 0
     else:
@@ -320,15 +334,17 @@ def evolve_orbit(host, prog, tsteps,
         t  = tsteps[istep]
         dt = t - tsteps[istep-1]
         
-        if not evolve_past_res_limits:
-            # Threshold values at resolution limit and skip explicit calculation of remaining steps
-            # (i.e. propagate values at resolution limit forward.
-            if (prog_mass < mres_effective) or (r < cfg.Rres) or (prog_mass/prog_mass_init < cfg.phi_res):
+        # Threshold values at resolution limit and skip explicit calculation of remaining steps
+        # (i.e. propagate values at resolution limit forward.
+        if (prog_mass <= mres_effective) or (r <= cfg.Rres) or ((prog_mass/prog_mass_init) <= cfg.phi_res):
+            prog_status.append(STATUS_PROG_LOST)
+            if not evolve_past_res_limits:
                 radii.append(r)
                 prog_masses.append(prog_mass)
                 prog_mstars.append(prog_mstar)
-                prog_status.append(STATUS_PROG_LOST)
-                continue
+                continue 
+        else:
+            prog_status.append(STATUS_PROG_INTACT)
             
         # Absolute levels in the tree
         start_step_level = levels_at_tstep[istep] - 1
@@ -383,7 +399,7 @@ def evolve_orbit(host, prog, tsteps,
                                     alpha=1., 
                                     lefflmax=0.1) 
             
-            # APC: g_le and g_ms are arrays, don't know why...
+            # APC: g_le and g_ms are arrays
             g_le = g_le[0][0]
             g_ms = g_ms[0][0]
             
@@ -408,7 +424,12 @@ def evolve_orbit(host, prog, tsteps,
     retdict['tsteps']      = tsteps
     retdict['tage']        = host.t_age[initial_level] + tsteps
     retdict['prog_dp']     = prog_dp
-    retdict['orbit']       = o
     retdict['levels_at_tsteps'] = levels_at_tstep
+    retdict['host_times_starting_from_initial_level'] = host_times_starting_from_initial_level
+    
+    # Note that the orbit xvArray property contains the phase space coordinate at each 
+    # timestep, but, since this this computed by SatGen internally, it does not include
+    # the initial conditions or any steps below the resolution limit. TODO?
+    retdict['orbit'] = o
     
     return retdict
