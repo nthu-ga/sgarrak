@@ -1,10 +1,10 @@
 import sys
 
-SATGEN_PATH = '/data/apcooper/sfw/SatGen'
+SATGEN_PATH = '/data/chungwen/SatGen'
 if not SATGEN_PATH in sys.path:
     sys.path.append(SATGEN_PATH)
 
-SATGEN_ETC_PATH = '/data/apcooper/sfw/SatGen/etc'
+SATGEN_ETC_PATH = '/data/chungwen/SatGen/etc'
 if not SATGEN_ETC_PATH in sys.path:
     sys.path.append(SATGEN_ETC_PATH)
     
