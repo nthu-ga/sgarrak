@@ -15,18 +15,18 @@ module purge
 module load python/3.10_miniforge
 # Limit the number of python threads
 module load slurm_limit_threads
-
-# Activate conda environment
-source activate satgen
+# Load hdf5
+module load gcc/9.4.0
+module load hdf5
 
 # Path to satgen_arrak script
-EXEC=/data/apcooper/projects/sgarrak/bin/satgen_arrak_mp.py 
+EXEC=/data/chungwen/sgarrak/bin/satgen_arrak_mp.py 
 
 # Parameters
 PCHTREES_RUN=1000_mixed_logmass
 SUBSTEPS=2
 
-INPUT=/data/apcooper/projects/sgarrak/pchtrees/runs/${PCHTREES_RUN}/output_satgen_${PCHTREES_RUN}.hdf5
+INPUT=/data/chungwen/sgarrak/pchtrees/runs/${PCHTREES_RUN}/output_satgen_${PCHTREES_RUN}.hdf5
 OUTPUT=./prog_evo_${PCHTREES_RUN}_${SUBSTEP}ss.hdf5
 
 srun --export=ALL python ${EXEC} -n ${SLURM_CPUS_PER_TASK} -s ${SUBSTEPS} -o ${OUTPUT} ${INPUT}
