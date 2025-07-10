@@ -9,7 +9,6 @@
  output_format = 'hdf5'
  file_base = './output_trees_100_mw'
  mres = 1e7
- nlev = 128
  zred_list = './satgen_level_zred_100myr_z3_z12.txt'
 
  [cosmology]
