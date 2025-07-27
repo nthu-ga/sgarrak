@@ -59,9 +59,12 @@ def is_iterable(x):
 
 ############################################################
 class Host():
-    def __init__(self, mass, zred, cosmology, output_zred=None):
+    def __init__(self, mass, zred, cosmology, fd=0.1, flattening=25., output_zred=None):
         """
-        output_zred: interpolated if passed
+        
+        Parameters: fd: disk mass fraction
+                    flattening: disk scale radius/disk scale height
+                    output_zred: interpolated if passed
         """
         self.cosmology = cosmology
         self.evolving_mass = is_iterable(mass)
@@ -133,12 +136,39 @@ class Host():
             
         # Make a profile for each timestep
         self.dens_profile = list()
-        for i in range(self.nlev):
-             self.dens_profile.append(NFW(self.mass[i],
-                                          self.concentration[i],
-                                          Delta=200.,
-                                          z=self.zred[i],
-                                          sf=1.))
+        if fd>0.:
+            self.halo_dens_profile = list()
+            self.disk_dens_profile = list()
+            # Including the disk potential
+            # .rh: halo radius within which density is Delta times rhoc [kpc]
+            for i in range(self.nlev):
+                
+                mass_i = self.mass[i]
+                conc_i = self.concentration[i]
+                z_i = self.zred[i]
+                
+                halo_profile = NFW(mass_i,conc_i,Delta=200.,z=z_i,sf=1.)
+
+                Reff = gh.Reff(halo_profile.rh,conc_i) # Virial radius & concentration
+                scale_radius = 0.766421/(1.+1./flattening) * Reff
+                scale_height = scale_radius / flattening
+                disk_mass = fd * mass_i
+                
+                disk_profile = MN(disk_mass,scale_radius,scale_height)
+                
+                self.dens_profile.append([halo_profile, disk_profile])
+                self.halo_dens_profile.append(halo_profile)
+                self.disk_dens_profile.append(disk_profile)
+
+        else:
+            for i in range(self.nlev):
+                 self.dens_profile.append(NFW(self.mass[i],
+                                              self.concentration[i],
+                                              Delta=200.,
+                                              z=self.zred[i],
+                                              sf=1.))
+
+
         return
 
 ############################################################
