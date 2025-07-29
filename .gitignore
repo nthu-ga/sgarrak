@@ -4,4 +4,6 @@
 *.ipynb_checkpoints
 *.swp
 notebooks/ics_example/trees/pchtrees
-notebooks/ics_example/ics_example.ipynb
+*.ipynb
+*.sh
+bin/copy_satgen_arrak_mp.py

@@ -1,7 +1,7 @@
  # This is an example pchtrees paramter file.
 
  [runtime]
- data_path = "/data/apcooper/sfw/pchtrees/data"
+ data_path = "/data/chungwen/pchtrees/pchtrees/data"
  iseed = -2020
  max_trees_per_file = 1000
 
