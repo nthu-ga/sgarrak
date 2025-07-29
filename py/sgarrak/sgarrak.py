@@ -173,7 +173,7 @@ class Host():
 
 ############################################################
 class Progenitor():
-    def __init__(self, mass, host, 
+    def __init__(self, mass, host,
                  cosmology=None, zred=None, level=None, mstar=None,
                  orbit_init_method='li2020', xc=None, eps=None):
         """
@@ -225,7 +225,17 @@ class Progenitor():
         assert(self.zred <= self.host.zred.max())
         assert(self.zred >  self.host.zred.min())
 
-        self.init_host_dens_profile  = self.host.dens_profile[self.level]
+        # The dens_profile in Host object returns the composite density profile
+        # The disk should not affect the orbit initialized
+        # (And init.orbit is not written to deal with a composite profile)
+        try: 
+            _ = self.host.disk_dens_profile
+            print("Disk profile found")
+            self.init_host_dens_profile = self.host.halo_dens_profile[self.level]
+        except AttributeError:
+            print("Disk profile not found")
+            self.init_host_dens_profile = self.host.dens_profile[self.level]
+
         self.init_host_concentration = self.host.concentration[self.level]
 
         # Draw progenitor concentration
@@ -263,7 +273,6 @@ class Progenitor():
         self.r_init = np.sqrt(self.xv[0]**2+self.xv[2]**2)
         return
 
-
 ############################################################
 def halo_mah_to_zhao_c_nfw(mass, t_age_gyr):
     """
@@ -278,7 +287,7 @@ def halo_mah_to_zhao_c_nfw(mass, t_age_gyr):
 
 
 ############################################################
-def evolve_orbit(host, prog, tsteps=None, 
+def evolve_orbit(host, prog ,tsteps=None, 
                  evolve_prog_mass=False, 
                  evolve_past_res_limits=False):
     """
@@ -365,7 +374,7 @@ def evolve_orbit(host, prog, tsteps=None,
         dt = t - tsteps[istep-1]
         
         # Threshold values at resolution limit and skip explicit calculation of remaining steps
-        # (i.e. propagate values at resolution limit forward.
+        # (i.e. propagate values at rehost_dpsolution limit forward.
         if (prog_mass <= mres_effective) or (r <= cfg.Rres) or ((prog_mass/prog_mass_init) <= cfg.phi_res):
             prog_status.append(STATUS_PROG_LOST)
             if not evolve_past_res_limits:
@@ -382,17 +391,12 @@ def evolve_orbit(host, prog, tsteps=None,
 
         # Update the host profile if needed
         hp = host.dens_profile[start_step_level]
-            
+        
         # Evolve the progenitor orbit based on the current mass
         # and host halo profile.
         
-        # t is the absolute time over which to integrated from 
-        # the initial conditions given. This is somewhat 
-        # counter-intuitive because you might think it should
-        # be the length of timestep over which to integrate
-        # from the current conditions...
         o.integrate(t, host_dp, prog_mass)
-
+        
         # Note that the coordinates are updated 
         # internally in the orbit instance "o" when calling
         # the ".integrate" method, here we assign them to 
@@ -400,13 +404,14 @@ def evolve_orbit(host, prog, tsteps=None,
         xv  = o.xv 
         r   = np.sqrt(xv[0]**2+xv[2]**2)
         radii.append(r)
-        
+
         if evolve_prog_mass:
             # Evolve the progenitor mass for dt in the current potential
             # Following SatGen (SatEvo), msub takes the initial potentials
             # and orbit at the start of the step.
             # dt is the length of the step (right? APC)
             alpha_strip = ev.alpha_from_c2(hc,pc)
+
             prog_evolved_mass, prog_tidal_raidus = ev.msub(prog_dp,
                                                            host_dp,
                                                            xv,
