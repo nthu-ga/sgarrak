@@ -19,14 +19,17 @@ module load slurm_limit_threads
 module load gcc/9.4.0
 module load hdf5
 
+# Load environment
+source activate cw
+
+
 # Path to satgen_arrak script
 EXEC=/data/chungwen/sgarrak/bin/satgen_arrak_mp.py 
 
 # Parameters
 PCHTREES_RUN=1000_mixed_logmass
-SUBSTEPS=2
 
 INPUT=/data/chungwen/sgarrak/pchtrees/runs/${PCHTREES_RUN}/output_satgen_${PCHTREES_RUN}.hdf5
 OUTPUT=./prog_evo_${PCHTREES_RUN}_${SUBSTEP}ss.hdf5
 
-srun --export=ALL python ${EXEC} -n ${SLURM_CPUS_PER_TASK} -s ${SUBSTEPS} -o ${OUTPUT} ${INPUT}
+srun --export=ALL python ${EXEC} -n ${SLURM_CPUS_PER_TASK} -o ${OUTPUT} ${INPUT}
