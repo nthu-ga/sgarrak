@@ -19,7 +19,7 @@ if not SATGEN_PATH in sys.path:
 SATGEN_ETC_PATH = '/data/apcooper/sfw/SatGen/etc'
 if not SATGEN_ETC_PATH in sys.path:
     sys.path.append(SATGEN_ETC_PATH)
-        
+
 # SatGen Imports
 import config as cfg
 import cosmo as co
@@ -136,8 +136,10 @@ class Host():
             
         # Make a profile for each timestep
         self.dens_profile = list()
-        if fd>0.:
-            self.halo_dens_profile = list()
+        self.halo_dens_profile = list()
+        self.has_disk = fd > 0
+        
+        if self.has_disk:
             self.disk_dens_profile = list()
             # Including the disk potential
             # .rh: halo radius within which density is Delta times rhoc [kpc]
@@ -159,15 +161,16 @@ class Host():
                 self.dens_profile.append([halo_profile, disk_profile])
                 self.halo_dens_profile.append(halo_profile)
                 self.disk_dens_profile.append(disk_profile)
-
         else:
             for i in range(self.nlev):
-                 self.dens_profile.append(NFW(self.mass[i],
-                                              self.concentration[i],
-                                              Delta=200.,
-                                              z=self.zred[i],
-                                              sf=1.))
-
+                halo_profile = NFW(self.mass[i],
+                                   self.concentration[i],
+                                   Delta=200.,
+                                   z=self.zred[i],
+                                   sf=1.)
+                # The host and halo density profiles are identical in this case
+                self.dens_profile.append(halo_profile)
+                self.halo_dens_profile.append(halo_profile)
 
         return
 
@@ -181,33 +184,33 @@ class Progenitor():
         """
         self.mass_init = mass
         self.mass = self.mass_init
-        
+
         # A progenitor must be associated with a host
         self.host = host
-        
+
         # By default the cosmology is the same as the host!
         if cosmology is not None:
             self.cosmology = cosmology
         else:
             cosmology = host.cosmology
-        
+
         if level is not None:
-            # The progenitor infall time is specified by a level (an index in the 
+            # The progenitor infall time is specified by a level (an index in the
             # list of host masses/redshifts, with level=0 at the root of the tree)
             assert(host.evolving_mass)
-            
+
             self._tree_level = level
             self.zred  = host._tree_zred[ self._tree_level]
-            self.infall_t_lbk = host._tree_t_lbk[self._tree_level]            
-            
+            self.infall_t_lbk = host._tree_t_lbk[self._tree_level]
+
             # In an interpolated tree, the progenitor level should be
             # set to the earlier of whichever two interpolated levels it
             # falls between.
             self.level = host._tree_level_to_output_level[self._tree_level]
-            
+
         elif zred is not None:
             # The progenitor infall time is specified as a redshift.
-            self.zred  = zred         
+            self.zred  = zred
             if host.evolving_mass:
                 # This should work even if the host is interpolated at
                 # the given zred. Note that this still discretizes
@@ -217,55 +220,47 @@ class Progenitor():
             else:
                 # There is only one level in a non-evolving host
                 self.level = 0
-                
+
             # Starting time for progenitor
             self.infall_t_lbk = cosmology.lookback_time(self.zred).value
-        
+
         # Sanity check for interpolated host
         assert(self.zred <= self.host.zred.max())
         assert(self.zred >  self.host.zred.min())
 
-        # The dens_profile in Host object returns the composite density profile
-        # The disk should not affect the orbit initialized
-        # (And init.orbit is not written to deal with a composite profile)
-        try: 
-            _ = self.host.disk_dens_profile
-            print("Disk profile found")
-            self.init_host_dens_profile = self.host.halo_dens_profile[self.level]
-        except AttributeError:
-            print("Disk profile not found")
-            self.init_host_dens_profile = self.host.dens_profile[self.level]
-
+        self.init_host_dens_profile = self.host.dens_profile[self.level]
+        self.init_host_halo_dens_profile = self.host.halo_dens_profile[self.level]
         self.init_host_concentration = self.host.concentration[self.level]
 
         # Draw progenitor concentration
         self.concentration = init.concentration(self.mass,self.zred,choice='DM14')
-        
+
         # The halo potential is a "Green" profile; an NFW with additional
         # methods to adjust for the effects of tidal stripping.
         self.dens_profile = Green(self.mass,self.concentration,Delta=200,z=self.zred)
-        
+
         # Draw stellar mass from mstar-mhalo releation
         if mstar is None:
             self.mstar_init = init.Mstar(self.mass_init, self.zred, choice='B13')
         else:
             self.mstar_init = mstar
         self.mstar = self.mstar_init
-        
+
         # The mass within rmax is used in the stripping calculations
         self.m_max_init = self.dens_profile.M(self.dens_profile.rmax)
-    
+
         if orbit_init_method is None:
-            # xv in cylindrical coordinates: np.array([R,phi,z,VR,Vphi,Vz])  
+            # xv in cylindrical coordinates: np.array([R,phi,z,VR,Vphi,Vz])
             self.xc  = xc
             self.eps = eps
-            self.xv  = init.orbit(self.init_host_dens_profile, xc=self.xc, eps=self.eps) 
+            self.xv  = init.orbit(self.init_host_dens_profile, xc=self.xc, eps=self.eps)
         elif orbit_init_method == 'li2020':
-            self.vel_ratio, self.gamma = init.ZZLi2020(self.init_host_dens_profile, 
-                                                       self.mass_init, 
+            # APC note the use of host_halo_dens_profile, rather than host_dens_profile
+            self.vel_ratio, self.gamma = init.ZZLi2020(self.init_host_halo_dens_profile,
+                                                       self.mass_init,
                                                        self.zred)
-            self.xv = init.orbit_from_Li2020(self.init_host_dens_profile, 
-                                             self.vel_ratio, 
+            self.xv = init.orbit_from_Li2020(self.init_host_halo_dens_profile,
+                                             self.vel_ratio,
                                              self.gamma)
         else:
             raise Exception
