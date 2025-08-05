@@ -59,7 +59,7 @@ def is_iterable(x):
 
 ############################################################
 class Host():
-    def __init__(self, mass, zred, cosmology, fd=0.1, flattening=25., output_zred=None):
+    def __init__(self, mass, zred, cosmology, fd=0.0, flattening=0., output_zred=None):
         """
         
         Parameters: fd: disk mass fraction
@@ -253,7 +253,7 @@ class Progenitor():
             # xv in cylindrical coordinates: np.array([R,phi,z,VR,Vphi,Vz])
             self.xc  = xc
             self.eps = eps
-            self.xv  = init.orbit(self.init_host_dens_profile, xc=self.xc, eps=self.eps)
+            self.xv  = init.orbit(self.init_host_halo_dens_profile, xc=self.xc, eps=self.eps)
         elif orbit_init_method == 'li2020':
             # APC note the use of host_halo_dens_profile, rather than host_dens_profile
             self.vel_ratio, self.gamma = init.ZZLi2020(self.init_host_halo_dens_profile,
@@ -443,6 +443,10 @@ def evolve_orbit(host, prog ,tsteps=None,
             
             prog_masses.append(prog_mass)
             prog_mstars.append(prog_mstar)
+        else:
+            # No mass evolution
+            prog_masses.append(prog_mass_init)
+            prog_mstars.append(prog_mstar_init)
             
     # Return
     retdict = dict()
