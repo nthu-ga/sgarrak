@@ -315,13 +315,7 @@ def evolve_orbit(host, prog ,tsteps=None,
 
     # We DO NOT update the host and prog objects in place;
     # Instead make copies.
-    try:
-        _ = prog.host.disk_dens_profile
-        print("Using composite halo+disk profile")
-        host_dp = copy.deepcopy(prog.host.dens_profile[prog.level])
-    except AttributeError:
-        print("Using halo profile")
-        host_dp    = copy.deepcopy(prog.init_host_dens_profile)
+    host_dp    = copy.deepcopy(prog.init_host_dens_profile)
     prog_dp    = copy.deepcopy(prog.dens_profile)
     
     prog_m_max_init = prog_dp.M(prog_dp.rmax)
