@@ -229,11 +229,11 @@ class Progenitor():
         # The disk should not affect the orbit initialized
         # (And init.orbit is not written to deal with a composite profile)
         try: 
+            # If a disk profile was found, the halo profile is halo_dens_profile
             _ = self.host.disk_dens_profile
-            print("Disk profile found")
             self.init_host_dens_profile = self.host.halo_dens_profile[self.level]
         except AttributeError:
-            print("Disk profile not found")
+            # If no disk, the halo profile is just dens_profile
             self.init_host_dens_profile = self.host.dens_profile[self.level]
 
         self.init_host_concentration = self.host.concentration[self.level]
@@ -285,6 +285,18 @@ def halo_mah_to_zhao_c_nfw(mass, t_age_gyr):
         h_c_nfw.append(init.c2_fromMAH(mass[i:],t_age_gyr[i:]))
     return np.array(h_c_nfw)
 
+############################################################
+def compute_orbit(orbit):
+    """
+    Compute the orbit object to 3D space phase coordinates
+    """
+    R = orbit.xvArray[:,0]
+    P = orbit.xvArray[:,1]
+    Z = orbit.xvArray[:,2]
+
+    X = R*np.cos(P)
+    Y = R*np.sin(P)
+    return np.array([X,Y,Z])
 
 ############################################################
 def evolve_orbit(host, prog ,tsteps=None, 
@@ -321,11 +333,10 @@ def evolve_orbit(host, prog ,tsteps=None,
     # We DO NOT update the host and prog objects in place;
     # Instead make copies.
     try:
+        # If a disk profile was found, the composite profile is the den_profile
         _ = prog.host.disk_dens_profile
-        print("Using composite halo+disk profile")
         host_dp = copy.deepcopy(prog.host.dens_profile[prog.level])
     except AttributeError:
-        print("Using halo profile")
         host_dp    = copy.deepcopy(prog.init_host_dens_profile)
     prog_dp    = copy.deepcopy(prog.dens_profile)
     
@@ -471,6 +482,6 @@ def evolve_orbit(host, prog ,tsteps=None,
     # Note that the orbit xvArray property contains the phase space coordinate at each 
     # timestep, but, since this this computed by SatGen internally, it does not include
     # the initial conditions or any steps below the resolution limit. TODO?
-    retdict['orbit'] = o
+    retdict['orbit'] = compute_orbit(o)
     
     return retdict

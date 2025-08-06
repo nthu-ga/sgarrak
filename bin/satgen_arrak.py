@@ -79,8 +79,7 @@ def process_tree(itree ,fd=0.1 ,flattening=25.,
                  progenitors=None,
                  tree_main_branch_masses=None,
                  tree_redshifts=None,
-                 cosmology=None,
-                 n_substeps=None):
+                 cosmology=None,):
     """
     """
     from time import sleep
@@ -143,23 +142,10 @@ def process_tree(itree ,fd=0.1 ,flattening=25.,
     return results
 
 ###########################################################
-def main(args,client=None):
+def main(args):
     """
     """
-    import multiprocessing
-    from multiprocessing import Pool
-    from functools import partial
-    from time import sleep
     
-    multiprocessing.set_start_method('fork')
-    
-    if 'SLURM_CPUS_ON_NODE' in os.environ:
-        ncpus = int(os.environ['SLURM_CPUS_ON_NODE'])
-    else:
-        ncpus = 1 
-    print('Available cores: {:d}'.format(ncpus))
-    
-    sleep(5)
     
     # Millennium
     hubble_parameter = 0.73
@@ -190,25 +176,20 @@ def main(args,client=None):
     tree_t_lbk_gyr = cosmology.lookback_time(tree_redshifts).value
     tree_t_age_gyr = cosmology.age(tree_redshifts).value
 
-    partial_process_tree = partial(process_tree, 
-                                   n_substeps = args.substeps,
-                                   progenitors=progenitors,
-                                   tree_main_branch_masses=tree_main_branch_masses,
-                                   tree_redshifts=tree_redshifts,
-                                   cosmology=cosmology)    
     print('Processing...')
     t_start = time()
     
-    pool      = Pool(processes=ncpus)
     results   = list()
-    chunksize = 2
-    NMAX      = ntrees
-    print('Running {:d} trees'.format(NMAX))
-    print("{:10s} | {:10s} | {:6s}".format("IDX", "ITREE", "TIME"))
-    for i, _ in enumerate(pool.imap_unordered(partial_process_tree, range(NMAX), chunksize)):
-        print("{:10d} | {:10d} | {:6.2f}s".format(i, _['itree'], _['t_proc']))
-        sys.stdout.flush()
-        results.append(_)
+    print('Running {:d} trees'.format(ntrees))
+    for itree in np.arange(0,ntrees):
+        print("Processing the {} tree".format(itree))
+        result = process_tree(itree,
+                              progenitors=progenitors,
+                              tree_main_branch_masses=tree_main_branch_masses,
+                              tree_redshifts=tree_redshifts,
+                              cosmology=cosmology)
+
+        results.append(result)
 
     print('Total time: {:g}'.format(time() - t_start))
     
@@ -232,11 +213,8 @@ def main(args,client=None):
 def parse_args():
     parser = argparse.ArgumentParser(description="Satgen for Arrakihs")
     parser.add_argument("tree_file", help="Input PCHTrees file (PFOP run)")
-    parser.add_argument("--ncores","-n", help="Number of cores", default=1, type=int)
-    parser.add_argument("--substeps","-s", help="Number of substeps", default=None, type=int)
     parser.add_argument("--output","-o", help="Output filename", default='all_progenitors.hdf5')
     return parser.parse_args()
-
 
 ###########################################################
 if __name__ == '__main__':
