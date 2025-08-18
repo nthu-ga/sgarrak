@@ -59,7 +59,7 @@ def is_iterable(x):
 
 ############################################################
 class Host():
-    def __init__(self, mass, zred, cosmology, fd=0.0, flattening=0., output_zred=None):
+    def __init__(self, mass, zred, cosmology, fd=0.0, flattening=0., disk_method='fd', output_zred=None):
         """
         
         Parameters: fd: disk mass fraction
@@ -138,8 +138,10 @@ class Host():
         self.dens_profile = list()
         self.halo_dens_profile = list()
         self.has_disk = fd > 0
-        
+        self.disk_mass = []
+
         if self.has_disk:
+            z0_disk_mass = init.Mstar(self.mass[0], self.zred[0], choice='B13')
             self.disk_dens_profile = list()
             # Including the disk potential
             # .rh: halo radius within which density is Delta times rhoc [kpc]
@@ -154,7 +156,12 @@ class Host():
                 Reff = gh.Reff(halo_profile.rh,conc_i) # Virial radius & concentration
                 scale_radius = 0.766421/(1.+1./flattening) * Reff
                 scale_height = scale_radius / flattening
-                disk_mass = fd * mass_i
+                if disk_method=='interp':
+                    disk_mass = z0_disk_mass * (mass_i/self.mass[0])
+                    self.disk_mass.append(disk_mass)
+                else:
+                    disk_mass = fd * mass_i
+                    self.disk_mass.append(disk_mass)
                 
                 disk_profile = MN(disk_mass,scale_radius,scale_height)
                 
