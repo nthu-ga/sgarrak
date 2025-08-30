@@ -59,6 +59,7 @@ def write_results(results, filename):
 
     for itree in range(0,ntrees):
         for k in data_keys:
+            print('processing data: ',k)
             total_results[k].append(np.atleast_1d(results[itree][k]))
         total_results['tree_idx'].append(np.repeat(results[itree]['itree'],results[itree]['nprog']))
 
@@ -72,6 +73,7 @@ def write_results(results, filename):
     with h5py.File(filename, "w") as f:
         f["/"].create_group('Progenitors')
         for k, v in total_results.items():
+            print("Writing {} data...".format(k))
             f["/Progenitors"].create_dataset(k, data=v, compression=6) 
             
     print('Wrote {:s}'.format(filename))
@@ -113,7 +115,7 @@ def process_tree(itree ,fd=0.0 ,flattening=25.,
     # Define result keys once
     result_keys = [
         'prog_masses', 'prog_mstars', 'status', 'radii', 'tsteps', 'tage',
-        'levels_at_tsteps', 'host_times_starting_from_initial_level', 'coors'
+        'levels_at_tsteps', 'coors'
     ]
 
     # Initialize results dict with empty lists
