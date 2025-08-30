@@ -297,6 +297,19 @@ def weighted_quantile(values, quantiles, sample_weight=None,
     else:
         weighted_quantiles /= np.sum(sample_weight)
     return np.interp(quantiles, weighted_quantiles, values)
+
+def valid_coors(coors):
+    """
+    This function filters [-1,-1,-1] in the coordinate array.
+
+    [-1,-1,-1] coordinates were fiiled in when a progenitor was 
+    below the cfg resolution to keep the arrays having the same shape.
+    """
+    
+    mask = ~(np.all(coors == -1, axis=1))
+    coors_valid = coors[mask]
+    
+    return coors_valid
 #########################################################
 ### Plot functions
 def larger_ticks(ax=None):

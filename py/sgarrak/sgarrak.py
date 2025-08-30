@@ -289,18 +289,33 @@ def halo_mah_to_zhao_c_nfw(mass, t_age_gyr):
     return np.array(h_c_nfw)
 
 ############################################################
-def compute_orbit(orbit):
+def compute_coordinates(xv):
     """
-    Compute the orbit object to 3D space phase coordinates
+    Compute the 3D space phase xv [R,phi,z,VR,Vphi,Vz] to coordinates
+    
+    The orbit object is used to calculate the orbital evolution,
+    so the length of the array is tsteps-1 because there is no
+    integration at the initial step?
+    
     """
-    R = orbit.xvArray[:,0]
-    P = orbit.xvArray[:,1]
-    Z = orbit.xvArray[:,2]
+    R,phi,Z = xv[0],xv[1],xv[2]
 
-    X = R*np.cos(P)
-    Y = R*np.sin(P)
+    X = R*np.cos(phi)
+    Y = R*np.sin(phi)
     return np.array([X,Y,Z])
 
+############################################################
+def reshape_coors(coorlist,Narray):
+    """
+    Re-shape the coors list to be the same size to the 
+    other parameters when it is below mres/rres(?).
+    """
+    
+    below_res_coor = [-1,-1,-1]
+    if len(coorlist)!=Narray:
+        below_res_steps = Narray-len(coorlist)
+        coorlist.extend([below_res_coor]*below_res_steps)
+    return
 ############################################################
 def evolve_orbit(host, prog ,tsteps=None, 
                  evolve_prog_mass=False, 
@@ -325,7 +340,8 @@ def evolve_orbit(host, prog ,tsteps=None,
     prog_masses = [prog.mass_init]
     prog_mstars = [prog.mstar_init]
     prog_status = [STATUS_PROG_INTACT]
-    
+    prog_coors  = [compute_coordinates(prog.xv)]    
+
     # Working variables
     prog_mass  = prog_masses[0]
     prog_mstar = prog_mstars[0]
@@ -417,6 +433,7 @@ def evolve_orbit(host, prog ,tsteps=None,
         # the ".integrate" method, here we assign them to 
         # a new variable "xv" only for bookkeeping
         xv  = o.xv 
+        prog_coors.append(compute_coordinates(xv))
         r   = np.sqrt(xv[0]**2+xv[2]**2)
         radii.append(r)
 
@@ -467,7 +484,9 @@ def evolve_orbit(host, prog ,tsteps=None,
             # No mass evolution
             prog_masses.append(prog_mass_init)
             prog_mstars.append(prog_mstar_init)
-            
+          
+    reshape_coors(prog_coors,len(tsteps))
+  
     # Return
     retdict = dict()
 
@@ -484,6 +503,6 @@ def evolve_orbit(host, prog ,tsteps=None,
     # Note that the orbit xvArray property contains the phase space coordinate at each 
     # timestep, but, since this this computed by SatGen internally, it does not include
     # the initial conditions or any steps below the resolution limit. TODO?
-    retdict['orbit'] = compute_orbit(o)
+    retdict['coors'] = np.array(prog_coors)
     
     return retdict
