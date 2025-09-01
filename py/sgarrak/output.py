@@ -39,7 +39,7 @@ from hmf import MassFunction
 import astropy.cosmology as cosmo
 
 from astropy.table import Table
-
+from functools import partial
 import tables as tb
 
 # <<< for clean on-screen prints, use with caution, make sure that 
@@ -130,17 +130,20 @@ def read_satgen():
                interpdisk: Use the z=0 B13 SMHM relation to get the disk mass,
                            and rescale to the earlier halo mass
     """
-    fn1 = '/data/chungwen/sgarrak/runs/1000_mixed_logmass/prog_evo_1000_mixed_logmass_lessoutput.hdf5'
-    fn2 = '/data/chungwen/sgarrak/runs/1000_mixed_logmass/prog_evo_1000_mixed_logmass_no_disk_lessoutput.hdf5'
-    fn3 = '/data/chungwen/sgarrak/runs/1000_mixed_logmass/prog_evo_1000_mixed_logmass_interp_disk_lessoutput.hdf5'
-    fn4 = '/data/chungwen/sgarrak/runs/1000_mixed_logmass/prog_evo_1000_mixed_logmass_fd002_disk_lessoutput.hdf5'    
+
+    lessoutput_path = '/data/chungwen/sgarrak/runs/1000_mixed_logmass/lessoutput/'
+
+    lo1 = lessoutput_path+'prog_evo_1000_mixed_logmass_lessoutput.hdf5'
+    lo2 = lessoutput_path+'prog_evo_1000_mixed_logmass_no_disk_lessoutput.hdf5'
+    lo3 = lessoutput_path+'prog_evo_1000_mixed_logmass_interp_disk_lessoutput.hdf5'
+    lo4 = lessoutput_path+'prog_evo_1000_mixed_logmass_fd002_disk_lessoutput.hdf5'    
 
     satgen_dataset_names = ['initial_mass','initial_mstar','final_mass','final_mstar','final_radius','final_status','tree_idx']
     
-    progenitor_fd01disk  = read_hdf5(fn1, satgen_dataset_names, group='/Progenitors')
-    progenitor_nodisk = read_hdf5(fn2, satgen_dataset_names, group='/Progenitors')
-    progenitor_interpdisk  = read_hdf5(fn3, satgen_dataset_names, group='/Progenitors')
-    progenitor_fd002disk  = read_hdf5(fn4, satgen_dataset_names, group='/Progenitors')
+    progenitor_fd01disk  = read_hdf5(lo1, satgen_dataset_names, group='/Progenitors')
+    progenitor_nodisk = read_hdf5(lo2, satgen_dataset_names, group='/Progenitors')
+    progenitor_interpdisk  = read_hdf5(lo3, satgen_dataset_names, group='/Progenitors')
+    progenitor_fd002disk  = read_hdf5(lo4, satgen_dataset_names, group='/Progenitors')
     
     return progenitor_fd01disk,progenitor_nodisk,progenitor_interpdisk,progenitor_fd002disk
 
@@ -244,6 +247,39 @@ def volume_weight(root_mass):
     
     return weights
 
+# ChatGPT
+def first_pericenter_distance(positions):
+    """
+    Compute the first pericenter distance for a particle spiraling into the origin.
+    
+    Parameters
+    ----------
+    positions : ndarray, shape (N, D)
+        Array of particle coordinates over time (D=2 or 3 dimensions).
+    
+    Returns
+    -------
+    float
+        The first pericenter distance.
+    int
+        The index where the first pericenter occurs.
+    """
+
+    # Radial distance from center
+    r = np.linalg.norm(positions, axis=1)
+
+    # The particle starts at large r, falls in, reaches pericenter (min r), then goes out again.
+    # Find first local minimum in r after the initial decrease.
+    dr = np.diff(r)
+
+    # Condition for local min: slope goes negative -> then positive
+    for i in range(1, len(dr)):
+        if dr[i-1] < 0 and dr[i] > 0:
+            return r[i], i  # r[i] is the pericenter distance, i is the index
+
+    # If no pericenter is found, return global min
+    return np.min(r), np.argmin(r)
+
 
 #########################################################
 ### Data arrangement
@@ -325,6 +361,12 @@ def plot_b18(ax,h=0.678,centrals=True,mean_only=False,
              scale_to_baryons=1,as_eff=False,edges=False,**kwargs):
     """
     """
+    b18smhm_path = "/data/apcooper/coco/obs/behroozi18/umachine-dr1/data/smhm/median_raw/smhm_a1.002312.dat"
+    b18smhm_scatter_path = "/data/apcooper/coco/obs/behroozi18/umachine-dr1/data/smhm/median_raw/smhm_scatter_a1.002312.dat"
+
+    b18smhm = Table.read(b18smhm_path,format='ascii.commented_header')
+    b18smhm_scatter = Table.read(b18smhm_scatter_path,format='ascii.commented_header')
+
     b18_h = 0.678
     hubble_factor = np.log10(b18_h/h)
     
@@ -337,7 +379,7 @@ def plot_b18(ax,h=0.678,centrals=True,mean_only=False,
         dyp = b18smhm_scatter['Med_Sat(13)'] # b18smhm['Err+(5)']
         dym = b18smhm_scatter['Med_Sat(13)'] # b18smhm['Err-(6)']
 
-    w = (y < 0) & (x > 10) #& (np.abs(dyp) < 1) & (np.abs(dym) < 1)
+    w = (y < 0) & (x > 6) #& (np.abs(dyp) < 1) & (np.abs(dym) < 1)
     
     xx = x[w]+hubble_factor
     ym = y[w]+2*hubble_factor
@@ -375,10 +417,14 @@ def plot_m18(ax,h=0.6781,edges=False,omega_0=0.25,**kwargs):
     """
     Moster (2018)
     """
+    # Table 8, z=0.1
+    moster_18_default = partial(moster_18_eff_func,M1=10**11.80,epsilon=0.14,beta=1.75,gamma=0.57)
+    moster_18_sigma_default = partial(moster_18_eff_sigma_func,Msigma=10**10.80,sigma0=0.16,alpha=1)
+
     m18_h = 0.6781
     hubble_factor = np.log10(m18_h/h)
         
-    lmhalo = np.arange(10,15,0.1)
+    lmhalo = np.arange(6,15,0.1)
     
     OMEGA_B = 0.04455
     baryon_mass_fraction = OMEGA_B/omega_0
@@ -617,7 +663,7 @@ def plot_macc_mstream_funtion(progs,root_mass,task='m_acc'):
     l2 = pl.Line2D([0,0],[0,0],ls='dashed',c='r')
     handles = [l1,l2]
     labels = ['m_acc','m_stream']
-    legend2 = pl.legend(frameon=False,handles,prop={'size':15},labels,loc='lower left')
+    legend2 = pl.legend(handles=handles,labels=labels,frameon=False,prop={'size':15},loc='lower left')
     pl.gca().add_artist(legend1)
 
     pl.xlim(7,11.5)
@@ -628,5 +674,19 @@ def plot_macc_mstream_funtion(progs,root_mass,task='m_acc'):
     
     return
 
+def fianl_mhalo_compare_coded_infall_time(tree_prog,progs,models):
+    """
+    final progenitor halo mass for two models color coded with infall time.
+    """
+
+    zinfall = tree_prog['ProgenitorZred']
+    x = progs[0]['final_mass']
+    y = progs[1]['final_mass']
+
+    pl.figure(figsize=(10,8))
+    pl.scatter(np.log10(x),np.log10(y),s=1,c=zinfall)
+    pl.xlabel(models[0]+r'$\,\log_{10} M_{\mathrm{halo}} \, (M_\odot)$ ', fontsize=20)
+    pl.ylabel(models[1]+r'$\,\log_{10} M_{\mathrm{halo}} \, (M_\odot)$ ', fontsize=20)
+    pl.colorbar()
 
 #########################################################
