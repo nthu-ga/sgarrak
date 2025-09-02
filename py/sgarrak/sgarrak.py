@@ -58,13 +58,47 @@ def is_iterable(x):
     return False
 
 ############################################################
+def avg_smhm():
+    """
+    Averaged stellar masses given redshifts and halo masses.
+    By drawing N number of random samples with different z
+    for each halo mass.
+    
+    The halo mass range was chosen by min-cfg.mres max-max tree mass
+    
+    Note init.Mstar reads linear halo mass
+    
+    """
+    zrange  = np.arange(0,14,0.2)
+    N = 100
+    Nz = np.random.choice(zrange,N)
+    
+    hmrange = 10**np.arange(2,12.5,0.5)
+
+    avgsm = []
+    for hm in hmrange:
+        smlist = [init.Mstar(hm,z, choice='B13') for z in Nz]
+        avgsm.append(np.median(smlist))
+
+    f = interp1d(hmrange,avgsm)
+    return f
+
+
+############################################################
 class Host():
     def __init__(self, mass, zred, cosmology, fd=0.0, flattening=0., disk_method='fd', output_zred=None):
         """
         
         Parameters: fd: disk mass fraction
                     flattening: disk scale radius/disk scale height
+                    disk_method: fd: use a constant disk mass fraction 
+                                 interp: use z=0 SMHM relation to get the stellar mass
+                                         and rescale to the hm at infall
+                                 z: directly return the stellar mass given z and hm at infall
+                                 interp_zavg: Average redshift scatter of SMHM relation
                     output_zred: interpolated if passed
+
+        Note: When assigning a disk_method, fd needs to give a number other than 0.
         """
         self.cosmology = cosmology
         self.evolving_mass = is_iterable(mass)
@@ -156,10 +190,20 @@ class Host():
                 Reff = gh.Reff(halo_profile.rh,conc_i) # Virial radius & concentration
                 scale_radius = 0.766421/(1.+1./flattening) * Reff
                 scale_height = scale_radius / flattening
+
                 if disk_method=='interp':
+                    # Use z=0 SMHM relation to linearly scale down the stellar mass.
                     disk_mass = z0_disk_mass * (mass_i/self.mass[0])
                     self.disk_mass.append(disk_mass)
+                if disk_method == 'z':
+                    # Determine stellar mass completely base on the infall z and hm.
+                    disk_mass = init.Mstar(mass_i,z_i,choice='B13')
+                if disk_method == 'interp_zavg':
+                    # Averaging redshift scatter of SMHM.
+                    avg_fit = avg_smhm()
+                    disk_mass = avg_fit(mass_i)
                 else:
+                    # Use a fix disk mass fraction
                     disk_mass = fd * mass_i
                     self.disk_mass.append(disk_mass)
                 
@@ -180,6 +224,38 @@ class Host():
                 self.halo_dens_profile.append(halo_profile)
 
         return
+
+############################################################
+def Tvir_threshold_rez10fit():
+    """
+    Virial temperature threshold for dark halos to form galaxies.
+    
+    The parameters are the polynomial fit from Galform with reionization z=10
+
+    Return: fitted function for before the reionization and after the redshift part
+    """
+
+    fit_hi = lambda hiz: 5.65454557e-04*hiz**2 - 5.53557011e-02*hiz + 8.26126393e+00
+    fit_low = lambda lowz: 1.68741576e-04*lowz**4 - 4.80806788e-03*lowz**3 + 5.52611417e-02*lowz**2 - 3.81763325e-01*lowz + 9.96120795e+00
+
+    return fit_hi,fit_low
+
+def threshold_check(hm,z):
+    """
+    The cooling threshold check is only taken at before mergers.
+    
+    Parameters: hm: progenitor halo mass before the merger
+                z: reshift before the merger
+    """
+    if z<10:
+        _,threshold = Tvir_threshold_rez10fit()
+    else:
+        threshold,_ = Tvir_threshold_rez10fit()
+    
+    if hm>threshold(z):
+        return 1
+    
+    return 0
 
 ############################################################
 class Progenitor():
@@ -253,6 +329,10 @@ class Progenitor():
         else:
             self.mstar_init = mstar
         self.mstar = self.mstar_init
+
+        # Check if the progenitor above the cooling threshold at infall.
+        # It would be better to check the entire assembly history.
+        self.has_galaxy = threshold_check(mass,self.zred)
 
         # The mass within rmax is used in the stripping calculations
         self.m_max_init = self.dens_profile.M(self.dens_profile.rmax)
@@ -341,6 +421,8 @@ def evolve_orbit(host, prog ,tsteps=None,
     prog_mstars = [prog.mstar_init]
     prog_status = [STATUS_PROG_INTACT]
     prog_coors  = [compute_coordinates(prog.xv)]    
+    
+    has_galaxy  = [prog.has_galaxy]
 
     # Working variables
     prog_mass  = prog_masses[0]
@@ -499,7 +581,8 @@ def evolve_orbit(host, prog ,tsteps=None,
     retdict['prog_dp']     = prog_dp
     retdict['levels_at_tsteps'] = levels_at_tstep
     retdict['host_times_starting_from_initial_level'] = host_times_starting_from_initial_level
-    
+    retdict['has_galaxy']  = prog.has_galaxy
+
     # Note that the orbit xvArray property contains the phase space coordinate at each 
     # timestep, but, since this this computed by SatGen internally, it does not include
     # the initial conditions or any steps below the resolution limit. TODO?
