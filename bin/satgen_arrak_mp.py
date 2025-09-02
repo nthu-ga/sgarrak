@@ -115,7 +115,7 @@ def process_tree(itree ,fd=0.0 ,flattening=25.,
     # Define result keys once
     result_keys = [
         'prog_masses', 'prog_mstars', 'status', 'radii', 'tsteps', 'tage',
-        'levels_at_tsteps', 'coors'
+        'levels_at_tsteps', 'coors', 'has_galaxy'
     ]
 
     # Initialize results dict with empty lists
