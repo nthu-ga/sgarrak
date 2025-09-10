@@ -7,4 +7,3 @@ notebooks/ics_example/trees/pchtrees
 *.ipynb
 *.sh
 bin/copy_satgen_arrak_mp.py
-py/sgarrak/config.py
