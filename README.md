@@ -2,17 +2,21 @@
 
 This requires a modified version of SatGen from the "apc" branch of `https://github.com/nthu-ga/SatGen`
 
-To hardcode the import path for SatGen (in the absence of APC writing a proper
-setup.py for this module...) you can add a file "config.py" in `py/sgarrak`.
-The contents of this file should simply be a single variable definition that
-points to your SatGen directory, as follows:
+This code (sgarrak) needs to be able to see the modified version of SatGen on
+its pythonpath. The reccomended way to do this is by creating a file
+`config.py` in the folder `~/.config/sgarrak`, where `~` is your home
+directory. For example, the following bash command does the job:
+
+`touch ~/.config/sgarrak/config.py`
+
+You must then add a single line to this file pointing to the top level of your
+SatGen repository:
 
 ```
-SATGEN_PATH = '/data/apcooper/sfw/SatGen'
+SATGEN_PATH = '/path/to/your/satgen'
 ```
 
-Obviously you should substitute your own path!
+You should substitute your own path!
 
-The file `py/sgarrak/config.py` is deliberately not included in the sgarrak git
-repository, so different users can have their own local configuration that
-isn't overwritten by pulling new versions from github.
+If needed, you can put the `config.py` in a different location and set the
+environment variable `SGARRAK_CONFIG_DIR = /path/to/config.py`.
