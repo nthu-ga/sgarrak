@@ -81,6 +81,7 @@ def write_results(results, filename):
 ###########################################################
 def process_tree(itree ,fd=0.0 ,flattening=25.,
                  disk_method='fd',
+                 walk_tree='backward',
                  output_zred=None,
                  progenitors=None,
                  tree_main_branch_masses=None,
@@ -110,7 +111,8 @@ def process_tree(itree ,fd=0.0 ,flattening=25.,
     
     # Call the host object
     host = sga.Host(host_mass_history, tree_redshifts, cosmology,
-                    fd=fd, flattening=flattening, output_zred=output_zred)
+                    fd=fd, flattening=flattening, output_zred=output_zred,
+                    disk_method=disk_method,walk_tree=walk_tree)
     
     # Define result keys once
     result_keys = [
@@ -200,6 +202,7 @@ def main(args,client=None):
                                    fd = args.fd,
                                    flattening = args.flattening,
                                    disk_method = args.disk_method,
+                                   walk_tree = args.walk_tree,
                                    n_substeps = args.substeps,
                                    progenitors=progenitors,
                                    tree_main_branch_masses=tree_main_branch_masses,
@@ -245,7 +248,8 @@ def parse_args():
     parser.add_argument("--substeps","-s", help="Number of substeps", default=None, type=int)
     parser.add_argument("--fd","-fd",help="Disk mass ratio",default=0.0, type=float)
     parser.add_argument("--flattening","-ft",help="disk scale length/scale height",default=25.,type=float)
-    parser.add_argument("--disk_method","-disk_method",help="fd or interp. interp uses z0 SMHM to represent the disk mass",default="fd", type=str)
+    parser.add_argument("--disk_method","-dm",help="fd, no, interp_sm, interp, step, interp_zavg",default="fd", type=str)
+    parser.add_argument("--walk_tree","-wt",help="backward or forward",default="backward", type=str)
     parser.add_argument("--output","-o", help="Output filename", default='all_progenitors.hdf5')
     return parser.parse_args()
 

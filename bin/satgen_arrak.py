@@ -62,6 +62,9 @@ def write_results(results, filename):
             total_results[k].append(np.atleast_1d(results[itree][k]))
         total_results['tree_idx'].append(np.repeat(results[itree]['itree'],results[itree]['nprog']))
 
+    for k in data_keys:
+        total_results[k] = np.concatenate(total_results[k],axis=0)
+
     total_results['tree_idx'] = np.concatenate(total_results['tree_idx'])
 
     total_nprog = len(total_results['tree_idx'])
@@ -74,12 +77,14 @@ def write_results(results, filename):
     print('Wrote {:s}'.format(filename))
     return
 ###########################################################
-def process_tree(itree ,fd=0.1 ,flattening=25.,
+def process_tree(itree ,fd=0.0 ,flattening=25.,
+                 disk_method='fd',
                  output_zred=None,
                  progenitors=None,
                  tree_main_branch_masses=None,
                  tree_redshifts=None,
-                 cosmology=None,):
+                 cosmology=None,
+                 n_substeps=None):
     """
     """
     from time import sleep
@@ -103,12 +108,13 @@ def process_tree(itree ,fd=0.1 ,flattening=25.,
     
     # Call the host object
     host = sga.Host(host_mass_history, tree_redshifts, cosmology,
-                    fd=fd, flattening=flattening, output_zred=output_zred)
+                    fd=fd, flattening=flattening, output_zred=output_zred, 
+                    disk_method=disk_method)
     
     # Define result keys once
     result_keys = [
         'prog_masses', 'prog_mstars', 'status', 'radii', 'tsteps', 'tage',
-        'prog_dp', 'levels_at_tsteps', 'host_times_starting_from_initial_level', 'orbit'
+        'levels_at_tsteps', 'coors', 'has_galaxy'
     ]
 
     # Initialize results dict with empty lists
@@ -184,6 +190,10 @@ def main(args):
     for itree in np.arange(0,ntrees):
         print("Processing the {} tree".format(itree))
         result = process_tree(itree,
+                              fd=args.fd,
+                              flattening=args.flattening,
+                              disk_method=args.disk_method,
+                              n_substeps=args.substeps,
                               progenitors=progenitors,
                               tree_main_branch_masses=tree_main_branch_masses,
                               tree_redshifts=tree_redshifts,
@@ -213,6 +223,10 @@ def main(args):
 def parse_args():
     parser = argparse.ArgumentParser(description="Satgen for Arrakihs")
     parser.add_argument("tree_file", help="Input PCHTrees file (PFOP run)")
+    parser.add_argument("--substeps","-s", help="Number of substeps", default=None, type=int)
+    parser.add_argument("--fd","-fd",help="Disk mass ratio",default=0.0, type=float)
+    parser.add_argument("--flattening","-ft",help="disk scale length/scale height",default=25.,type=float)
+    parser.add_argument("--disk_method","-disk_method",help="fd or interp. interp uses z0 SMHM to represent the disk mass",default="fd", type=str)
     parser.add_argument("--output","-o", help="Output filename", default='all_progenitors.hdf5')
     return parser.parse_args()
 

@@ -7,6 +7,7 @@ import tables as tb
 import warnings
 warnings.filterwarnings("ignore", category=RuntimeWarning)
 import astropy.cosmology as cosmo
+from scipy.interpolate import interp1d
 
 from astropy.table import Table
 
@@ -58,7 +59,7 @@ def is_iterable(x):
     return False
 
 ############################################################
-def avg_smhm():
+def avg_smhm(n,return_edge=False):
     """
     Averaged stellar masses given redshifts and halo masses.
     By drawing N number of random samples with different z
@@ -70,23 +71,33 @@ def avg_smhm():
     
     """
     zrange  = np.arange(0,14,0.2)
-    N = 100
+    N = n
     Nz = np.random.choice(zrange,N)
     
-    hmrange = 10**np.arange(2,12.5,0.5)
+    hmrange = 10**np.arange(2,13,0.5)
 
     avgsm = []
+    maxsm = []
+    minsm = []
+
     for hm in hmrange:
         smlist = [init.Mstar(hm,z, choice='B13') for z in Nz]
         avgsm.append(np.median(smlist))
+        maxsm.append(max(smlist))
+        minsm.append(min(smlist))
 
     f = interp1d(hmrange,avgsm)
+
+    if return_edge:
+        return np.array(maxsm),np.array(minsm),hmrange
+
     return f
 
 
 ############################################################
 class Host():
-    def __init__(self, mass, zred, cosmology, fd=0.0, flattening=0., disk_method='fd', output_zred=None):
+    def __init__(self, mass, zred, cosmology, fd=0.0, flattening=0., disk_method='fd',
+                 output_zred=None, walk_tree='backward'):
         """
         
         Parameters: fd: disk mass fraction
@@ -172,14 +183,23 @@ class Host():
         self.dens_profile = list()
         self.halo_dens_profile = list()
         self.has_disk = fd > 0
-        self.disk_mass = []
 
         if self.has_disk:
-            z0_disk_mass = init.Mstar(self.mass[0], self.zred[0], choice='B13')
-            self.disk_dens_profile = list()
+
+            mean_sm_z0   = 10**gh.lgMs_B13(np.log10(self.mass[0]),z=0.)
+            mean_sm_nlev = 10**gh.lgMs_B13(np.log10(self.mass[self.nlev-1]),self.zred[self.nlev-1])
+            idx_iter = range(self.nlev) if walk_tree == 'backward' else reversed(range(self.nlev))
+            starting_disk_mass = (
+                init.Mstar(self.mass[0], self.zred[0], choice='B13')
+                if walk_tree == 'backward'
+                else init.Mstar(self.mass[self.nlev-1], self.zred[self.nlev-1], choice='B13'))
+            next_disk_mass = starting_disk_mass
+
+            self.disk_mass = []
+            self.disk_dens_profile = []
             # Including the disk potential
             # .rh: halo radius within which density is Delta times rhoc [kpc]
-            for i in range(self.nlev):
+            for i in idx_iter:
                 
                 mass_i = self.mass[i]
                 conc_i = self.concentration[i]
@@ -192,20 +212,71 @@ class Host():
                 scale_height = scale_radius / flattening
 
                 if disk_method=='interp':
-                    # Use z=0 SMHM relation to linearly scale down the stellar mass.
-                    disk_mass = z0_disk_mass * (mass_i/self.mass[0])
+                    # Use z=0 SMHM relation to linearly scale down the stellar mass
+                    # with the difference of the halo masses.
+                    disk_mass = (starting_disk_mass * (mass_i/self.mass[0])
+                                if walk_tree == 'backward'
+                                else starting_disk_mass * (mass_i/self.mass[self.nlev-1]))
                     self.disk_mass.append(disk_mass)
-                if disk_method == 'z':
-                    # Determine stellar mass completely base on the infall z and hm.
-                    disk_mass = init.Mstar(mass_i,z_i,choice='B13')
-                if disk_method == 'interp_zavg':
+                elif disk_method == 'interp_zavg':
                     # Averaging redshift scatter of SMHM.
                     avg_fit = avg_smhm()
                     disk_mass = avg_fit(mass_i)
-                else:
+                    self.disk_mass.append(disk_mass)
+                elif disk_method == 'interp_sm':
+                    # Use the mean z=0 SMHM relation to get the stellar mass difference.
+                    # And use the difference to scale down the z=0 disk mass.
+                    mean_sm_ilev = 10**gh.lgMs_B13(np.log10(mass_i),z_i)
+                    disk_mass = (starting_disk_mass * (mean_sm_ilev/mean_sm_z0)
+                                if walk_tree == 'backward'
+                                else starting_disk_mass * (mean_sm_ilev/mean_sm_nlev))
+                    self.disk_mass.append(disk_mass)
+                #elif disk_method == 'roll_dice':
+                #    # Take the stellar mass as long as it goes up in the past
+                #    # If init.Mstar finds a higher mass, do it again.
+                #    # This might cost many resources if the current level gives the lowest
+                #    # stellar mass (The chance of finding a lower stellar mass at eairlier 
+                #    # time is lower).
+                #    # Note this method makes job never finish if the rolling result is 
+                #    # close to the low edge (it is difficult for the next level to find 
+                #    # another lower stellar mass.).
+                #    disk_mass = init.Mstar(mass_i,z_i, choice='B13')
+                #    while later_disk_mass<disk_mass:
+                #        disk_mass = init.Mstar(mass_i,z_i, choice='B13')
+                #    self.disk_mass.append(disk_mass)
+                #    later_disk_mass = disk_mass
+                elif disk_method == 'step':
+                    # Similar to roll dice, but only roll the dice once.
+                    # If the previous disk mass is higher, it remains.
+                    # For the forward method, also apply disk growth if 
+                    # the halo mass is above the cooling threshold.
+                    
+                    disk_mass = init.Mstar(mass_i,z_i, choice='B13')
+                    grow_disk = threshold_check(mass_i,z_i)
+                    if walk_tree=='backward':
+                        if next_disk_mass>=disk_mass:
+                            self.disk_mass.append(disk_mass)
+                            next_disk_mass = disk_mass
+                        else:
+                            self.disk_mass.append(next_disk_mass)
+                            next_disk_mass = next_disk_mass
+                    else:
+                        if next_disk_mass<=disk_mass:
+                            if grow_disk==1:
+                                self.disk_mass.append(disk_mass)
+                                next_disk_mass = disk_mass
+                            else:
+                                self.disk_mass.append(next_disk_mass)
+                                next_disk_mass = next_disk_mass
+                        else:
+                            self.disk_mass.append(next_disk_mass)
+                            next_disk_mass = next_disk_mass
+                elif disk_method == 'fd':
                     # Use a fix disk mass fraction
                     disk_mass = fd * mass_i
                     self.disk_mass.append(disk_mass)
+                else:
+                    raise ValueError("disk method not supported")
                 
                 disk_profile = MN(disk_mass,scale_radius,scale_height)
                 
@@ -223,6 +294,13 @@ class Host():
                 self.dens_profile.append(halo_profile)
                 self.halo_dens_profile.append(halo_profile)
 
+        # Reverse the array for forward method, so no need to change other function.
+        if self.has_disk:
+            if walk_tree!='backward':
+                self.disk_mass = self.disk_mass[::-1]
+                self.dens_profile = self.dens_profile[::-1]
+                self.halo_dens_profile = self.halo_dens_profile[::-1]
+                self.disk_dens_profile = self.disk_dens_profile[::-1]
         return
 
 ############################################################
@@ -244,7 +322,7 @@ def threshold_check(hm,z):
     """
     The cooling threshold check is only taken at before mergers.
     
-    Parameters: hm: progenitor halo mass before the merger
+    Parameters: hm: linear progenitor halo mass before the merger
                 z: reshift before the merger
     """
     if z<10:
@@ -252,7 +330,7 @@ def threshold_check(hm,z):
     else:
         threshold,_ = Tvir_threshold_rez10fit()
     
-    if hm>threshold(z):
+    if np.log10(hm)>threshold(z):
         return 1
     
     return 0
