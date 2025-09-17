@@ -150,7 +150,7 @@ def read_satgen(ver=1):
     if ver==1:
         data_path = dir_path+'reionoutput/'
 
-        output_dataset_names = ['fd01','no','interp_sm','step','interp']
+        output_dataset_names = ['fd01','no','step']#,'interp_sm','interp']
         satgen_dataset_names = ['coors','has_galaxy','itree','levels_at_tsteps','nprog',
                                 'prog_masses','prog_mstars','radii','status','t_proc','tage',
                                 'tree_idx','tsteps']

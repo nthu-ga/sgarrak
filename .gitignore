@@ -1,6 +1,8 @@
 *.pyc
 *.hdf5
 *.log
+*.err
+*.out
 *.ipynb_checkpoints
 *.swp
 notebooks/ics_example/trees/pchtrees

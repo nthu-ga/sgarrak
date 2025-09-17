@@ -1,0 +1,30 @@
+This run adds two new disk methods and cooling threshold check into hdf5 
+
+Output parameters:
+- prog_masses 
+- prog_mstars
+- status (intact:0, lost:1)
+- radii
+- tsteps
+- tage
+- levels_at_tsteps
+- coors
+- has_galaxy (has a galaxy:1, no galaxy:0)
+
+9/4/2025 Update:
+Multiprocessing can not use exclusive (why?).
+It will cause multi-thread trying to write the same hdf5 at one time, this results in corrupted data.
+
+Note:
+fd01_disk -> It also used exclusive (I remember), but it didn't used 96 threads.
+             The file is not corrupted.
+interp_zavg -> It used single processing.
+
+9/6/2025 Updates:
+Re-run all the files after fixed a bug.
+Tried job array (parallel) but it couldn't work, same hdf5 issue...
+
+9/12/2025 Updates:
+Re-run after including forward and backward method.
+Fix the cooling threshold, add disk growth only when crossing the cooling threshold
+
