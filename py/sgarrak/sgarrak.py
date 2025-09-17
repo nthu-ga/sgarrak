@@ -13,11 +13,45 @@ from astropy.table import Table
 
 import copy
 
-SATGEN_PATH = '/data/apcooper/sfw/SatGen'
+# Default config
+SATGEN_PATH = None
+
+config_dir = os.getenv('SGARRAK_CONFIG_DIR')
+if config_dir is None:
+    config_dir = '~/.config/sgarrak'
+config_path = os.path.expanduser(os.path.join(config_dir,'config.py'))
+
+import importlib.util
+
+# Read a config module if there is one
+if os.path.exists(config_path):
+    # Create a module spec from the file path
+    spec = importlib.util.spec_from_file_location('sgarrak_config', config_path)
+    # Create a new module object based on the spec
+    sgarrak_config = importlib.util.module_from_spec(spec)
+    # Add the module to sys.modules (optional, but good practice for proper module management)
+    sys.modules['sgarrak_config'] = sgarrak_config
+    # Execute the module's code within the newly created module object
+    spec.loader.exec_module(sgarrak_config)
+
+    print('Module')
+    print(sgarrak_config)
+
+    if hasattr(sgarrak_config, 'SATGEN_PATH'):
+        SATGEN_PATH = sgarrak_config.SATGEN_PATH
+
+# Bad practice, disable this warning if it's too noisy
+if SATGEN_PATH is None:
+    print('SATGEN_PATH is not defined -- see README!')
+    if __name__ == '__main__':
+        sys.exit(99)
+    else:
+        raise ImportError
+
+# Put SatGen on the pythonpath
 if not SATGEN_PATH in sys.path:
     sys.path.append(SATGEN_PATH)
-
-SATGEN_ETC_PATH = '/data/apcooper/sfw/SatGen/etc'
+SATGEN_ETC_PATH = os.path.join(SATGEN_PATH,'etc')
 if not SATGEN_ETC_PATH in sys.path:
     sys.path.append(SATGEN_ETC_PATH)
 
