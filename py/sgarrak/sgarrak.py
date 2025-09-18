@@ -549,9 +549,12 @@ def evolve_orbit(host, prog ,tsteps=None,
     prog_dp    = copy.deepcopy(prog.dens_profile)
     
     prog_m_max_init = prog_dp.M(prog_dp.rmax)
-    
-    hc = prog.init_host_concentration
-    pc = prog.concentration
+
+    # We don't need this
+    # hc = prog.init_host_concentration
+ 
+    # Store the initial concentraiton for use in the mass loss routine
+    init_pc = prog.concentration
     
     o = orbit(prog.xv)    
     xv     = o.xv 
@@ -615,8 +618,9 @@ def evolve_orbit(host, prog ,tsteps=None,
         end_step_level   = start_step_level + 1
 
         # Update the host profile if needed
-        hp = host.dens_profile[start_step_level]
-        
+        host_dp = copy.deepcopy(host.dens_profile[start_step_level])
+        host_concentration = host.concentration[start_step_level]
+
         # Evolve the progenitor orbit based on the current mass
         # and host halo profile.
         
@@ -636,8 +640,12 @@ def evolve_orbit(host, prog ,tsteps=None,
             # Following SatGen (SatEvo), msub takes the initial potentials
             # and orbit at the start of the step.
             # dt is the length of the step (right? APC)
-            alpha_strip = ev.alpha_from_c2(hc,pc)
+            # SatGen requires the *initial* progenitor concentration and the
+            # *instantaneous* host concentration
+            alpha_strip = ev.alpha_from_c2(host_concentration,init_pc)
 
+            # prog_dp and host_dp are the instantaneous values, updated
+            # for each step.
             prog_evolved_mass, prog_tidal_raidus = ev.msub(prog_dp,
                                                            host_dp,
                                                            xv,
