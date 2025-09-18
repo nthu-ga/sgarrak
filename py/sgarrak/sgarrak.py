@@ -14,7 +14,8 @@ from astropy.table import Table
 import copy
 
 # Default config
-SATGEN_PATH = None
+if not 'SATGEN_PATH' in globals():
+    SATGEN_PATH = None
 
 config_dir = os.getenv('SGARRAK_CONFIG_DIR')
 if config_dir is None:
@@ -222,15 +223,24 @@ class Host():
 
             mean_sm_z0   = 10**gh.lgMs_B13(np.log10(self.mass[0]),z=0.)
             mean_sm_nlev = 10**gh.lgMs_B13(np.log10(self.mass[self.nlev-1]),self.zred[self.nlev-1])
+            
             idx_iter = range(self.nlev) if walk_tree == 'backward' else reversed(range(self.nlev))
-            starting_disk_mass = (
-                init.Mstar(self.mass[0], self.zred[0], choice='B13')
-                if walk_tree == 'backward'
-                else init.Mstar(self.mass[self.nlev-1], self.zred[self.nlev-1], choice='B13'))
+            
+            if walk_tree == 'backward':
+                starting_disk_mass = init.Mstar(self.mass[0], self.zred[0], choice='B13')
+            else:
+                starting_disk_mass = init.Mstar(self.mass[self.nlev-1], 
+                                                self.zred[self.nlev-1], choice='B13')
+            #istarting_disk_mass = (
+            #    init.Mstar(self.mass[0], self.zred[0], choice='B13')
+            #    if walk_tree == 'backward' else init.Mstar(self.mass[self.nlev-1], 
+            #                                               self.zred[self.nlev-1], choice='B13'))
+
             next_disk_mass = starting_disk_mass
 
             self.disk_mass = []
             self.disk_dens_profile = []
+            
             # Including the disk potential
             # .rh: halo radius within which density is Delta times rhoc [kpc]
             for i in idx_iter:
@@ -330,7 +340,7 @@ class Host():
 
         # Reverse the array for forward method, so no need to change other function.
         if self.has_disk:
-            if walk_tree!='backward':
+            if walk_tree != 'backward':
                 self.disk_mass = self.disk_mass[::-1]
                 self.dens_profile = self.dens_profile[::-1]
                 self.halo_dens_profile = self.halo_dens_profile[::-1]
@@ -428,6 +438,8 @@ class Progenitor():
         
         self.init_host_concentration = self.host.concentration[self.level]
 
+        self.init_disk_mass = self.host.disk_mass[self.level]
+
         # Draw progenitor concentration
         self.concentration = init.concentration(self.mass,self.zred,choice='DM14')
 
@@ -508,6 +520,7 @@ def reshape_coors(coorlist,Narray):
         below_res_steps = Narray-len(coorlist)
         coorlist.extend([below_res_coor]*below_res_steps)
     return
+
 ############################################################
 def evolve_orbit(host, prog ,tsteps=None, 
                  evolve_prog_mass=False, 
@@ -536,6 +549,8 @@ def evolve_orbit(host, prog ,tsteps=None,
     
     has_galaxy  = [prog.has_galaxy]
 
+    host_disk_masses = [prog.init_disk_mass]
+
     # Working variables
     prog_mass  = prog_masses[0]
     prog_mstar = prog_mstars[0]
@@ -549,9 +564,12 @@ def evolve_orbit(host, prog ,tsteps=None,
     prog_dp    = copy.deepcopy(prog.dens_profile)
     
     prog_m_max_init = prog_dp.M(prog_dp.rmax)
-    
-    hc = prog.init_host_concentration
-    pc = prog.concentration
+
+    # We don't need this
+    # hc = prog.init_host_concentration
+ 
+    # Store the initial concentraiton for use in the mass loss routine
+    init_pc = prog.concentration
     
     o = orbit(prog.xv)    
     xv     = o.xv 
@@ -615,8 +633,10 @@ def evolve_orbit(host, prog ,tsteps=None,
         end_step_level   = start_step_level + 1
 
         # Update the host profile if needed
-        hp = host.dens_profile[start_step_level]
-        
+        host_dp = copy.deepcopy(host.dens_profile[start_step_level])
+        host_concentration = host.concentration[start_step_level]
+        host_disk_mass = host.disk_mass[start_step_level]
+
         # Evolve the progenitor orbit based on the current mass
         # and host halo profile.
         
@@ -636,8 +656,12 @@ def evolve_orbit(host, prog ,tsteps=None,
             # Following SatGen (SatEvo), msub takes the initial potentials
             # and orbit at the start of the step.
             # dt is the length of the step (right? APC)
-            alpha_strip = ev.alpha_from_c2(hc,pc)
+            # SatGen requires the *initial* progenitor concentration and the
+            # *instantaneous* host concentration
+            alpha_strip = ev.alpha_from_c2(host_concentration,init_pc)
 
+            # prog_dp and host_dp are the instantaneous values, updated
+            # for each step.
             prog_evolved_mass, prog_tidal_raidus = ev.msub(prog_dp,
                                                            host_dp,
                                                            xv,
@@ -674,6 +698,8 @@ def evolve_orbit(host, prog ,tsteps=None,
             
             prog_masses.append(prog_mass)
             prog_mstars.append(prog_mstar)
+
+            host_disk_masses.append(host_disk_mass)
         else:
             # No mass evolution
             prog_masses.append(prog_mass_init)
@@ -686,7 +712,8 @@ def evolve_orbit(host, prog ,tsteps=None,
 
     retdict['prog_masses'] = np.array(prog_masses)   
     retdict['prog_mstars'] = np.array(prog_mstars)  
-    retdict['status']      = np.array(prog_status)        
+    retdict['status']      = np.array(prog_status) 
+    retdict['host_disk_masses'] = np.array(host_disk_masses)   
     retdict['radii']       = np.array(radii)
     retdict['tsteps']      = tsteps
     retdict['tage']        = host.t_age[initial_level] + tsteps
