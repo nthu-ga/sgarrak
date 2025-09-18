@@ -31,7 +31,8 @@ import galhalo as gh
 import aux
 import init
 
-PY_PATH = '/data/chungwen/sgarrak/py/sgarrak'
+#PY_PATH = '/data/chungwen/sgarrak/py/sgarrak'
+PY_PATH = '/data/apcooper/projects/sgarrak/py/sgarrak'
 if not PY_PATH in sys.path:
     sys.path.append(PY_PATH)
 
@@ -117,7 +118,7 @@ def process_tree(itree ,fd=0.0 ,flattening=25.,
     
     # Define result keys once
     result_keys = [
-        'prog_masses', 'prog_mstars', 'status', 'radii', 'tsteps', 'tage',
+        'prog_masses', 'prog_mstars', 'host_disk_masses','status', 'radii', 'tsteps', 'tage',
         'levels_at_tsteps', 'coors', 'has_galaxy'
     ]
 
@@ -215,7 +216,7 @@ def main(args,client=None):
     pool      = Pool(processes=ncpus)
     results   = list()
     chunksize = 2
-    NMAX      = ntrees
+    NMAX      = 2
     print('Running {:d} trees'.format(NMAX))
     print("{:10s} | {:10s} | {:6s}".format("IDX", "ITREE", "TIME"))
     for i, _ in enumerate(pool.imap_unordered(partial_process_tree, range(NMAX), chunksize)):
