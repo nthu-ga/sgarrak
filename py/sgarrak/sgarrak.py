@@ -14,7 +14,8 @@ from astropy.table import Table
 import copy
 
 # Default config
-SATGEN_PATH = None
+if not 'SATGEN_PATH' in globals():
+    SATGEN_PATH = None
 
 config_dir = os.getenv('SGARRAK_CONFIG_DIR')
 if config_dir is None:
@@ -229,7 +230,7 @@ class Host():
                 starting_disk_mass = init.Mstar(self.mass[0], self.zred[0], choice='B13')
             else:
                 starting_disk_mass = init.Mstar(self.mass[self.nlev-1], 
-                                                self.zred[self.nlev-1], choice='B13'))
+                                                self.zred[self.nlev-1], choice='B13')
             #istarting_disk_mass = (
             #    init.Mstar(self.mass[0], self.zred[0], choice='B13')
             #    if walk_tree == 'backward' else init.Mstar(self.mass[self.nlev-1], 
