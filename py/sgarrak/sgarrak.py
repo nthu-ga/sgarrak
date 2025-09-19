@@ -629,6 +629,8 @@ def evolve_orbit(host, prog ,tsteps=None,
                 radii.append(r)
                 prog_masses.append(prog_mass)
                 prog_mstars.append(prog_mstar)
+                if host.has_disk:
+                    host_disk_masses.append(host_disk_mass)
                 continue 
         else:
             prog_status.append(STATUS_PROG_INTACT)
