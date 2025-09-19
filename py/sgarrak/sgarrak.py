@@ -620,7 +620,11 @@ def evolve_orbit(host, prog ,tsteps=None,
     for istep in range(1,nsteps):    
         t  = tsteps[istep]
         dt = t - tsteps[istep-1]
-        
+
+        # Absolute levels in the tree
+        start_step_level = levels_at_tstep[istep] - 1
+        end_step_level   = start_step_level + 1
+
         # Threshold values at resolution limit and skip explicit calculation of remaining steps
         # (i.e. propagate values at rehost_dpsolution limit forward.
         if (prog_mass <= mres_effective) or (r <= cfg.Rres) or ((prog_mass/prog_mass_init) <= cfg.phi_res):
@@ -630,14 +634,10 @@ def evolve_orbit(host, prog ,tsteps=None,
                 prog_masses.append(prog_mass)
                 prog_mstars.append(prog_mstar)
                 if host.has_disk:
-                    host_disk_masses.append(host_disk_mass)
+                    host_disk_masses.append(host.disk_mass[start_step_level])
                 continue 
         else:
             prog_status.append(STATUS_PROG_INTACT)
-            
-        # Absolute levels in the tree
-        start_step_level = levels_at_tstep[istep] - 1
-        end_step_level   = start_step_level + 1
 
         # Update the host profile if needed
         host_dp = copy.deepcopy(host.dens_profile[start_step_level])
