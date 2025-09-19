@@ -35,8 +35,8 @@ if os.path.exists(config_path):
     # Execute the module's code within the newly created module object
     spec.loader.exec_module(sgarrak_config)
 
-    print('Module')
-    print(sgarrak_config)
+    # print('Module')
+    # print(sgarrak_config)
 
     if hasattr(sgarrak_config, 'SATGEN_PATH'):
         SATGEN_PATH = sgarrak_config.SATGEN_PATH
@@ -323,7 +323,10 @@ class Host():
                     raise ValueError("disk method not supported")
                 
                 disk_profile = MN(disk_mass,scale_radius,scale_height)
-                
+
+                # Pre-generate the interpolator for M(<r)
+                disk_profile.M(10,0)
+
                 self.dens_profile.append([halo_profile, disk_profile])
                 self.halo_dens_profile.append(halo_profile)
                 self.disk_dens_profile.append(disk_profile)
@@ -438,7 +441,8 @@ class Progenitor():
         
         self.init_host_concentration = self.host.concentration[self.level]
 
-        self.init_disk_mass = self.host.disk_mass[self.level]
+        if host.has_disk:
+            self.init_disk_mass = self.host.disk_mass[self.level]
 
         # Draw progenitor concentration
         self.concentration = init.concentration(self.mass,self.zred,choice='DM14')
@@ -549,7 +553,8 @@ def evolve_orbit(host, prog ,tsteps=None,
     
     has_galaxy  = [prog.has_galaxy]
 
-    host_disk_masses = [prog.init_disk_mass]
+    if host.has_disk:
+        host_disk_masses = [prog.init_disk_mass]
 
     # Working variables
     prog_mass  = prog_masses[0]
@@ -615,7 +620,11 @@ def evolve_orbit(host, prog ,tsteps=None,
     for istep in range(1,nsteps):    
         t  = tsteps[istep]
         dt = t - tsteps[istep-1]
-        
+
+        # Absolute levels in the tree
+        start_step_level = levels_at_tstep[istep] - 1
+        end_step_level   = start_step_level + 1
+
         # Threshold values at resolution limit and skip explicit calculation of remaining steps
         # (i.e. propagate values at rehost_dpsolution limit forward.
         if (prog_mass <= mres_effective) or (r <= cfg.Rres) or ((prog_mass/prog_mass_init) <= cfg.phi_res):
@@ -624,18 +633,17 @@ def evolve_orbit(host, prog ,tsteps=None,
                 radii.append(r)
                 prog_masses.append(prog_mass)
                 prog_mstars.append(prog_mstar)
+                if host.has_disk:
+                    host_disk_masses.append(host.disk_mass[start_step_level])
                 continue 
         else:
             prog_status.append(STATUS_PROG_INTACT)
-            
-        # Absolute levels in the tree
-        start_step_level = levels_at_tstep[istep] - 1
-        end_step_level   = start_step_level + 1
 
         # Update the host profile if needed
         host_dp = copy.deepcopy(host.dens_profile[start_step_level])
         host_concentration = host.concentration[start_step_level]
-        host_disk_mass = host.disk_mass[start_step_level]
+        if host.has_disk:
+            host_disk_mass = host.disk_mass[start_step_level]
 
         # Evolve the progenitor orbit based on the current mass
         # and host halo profile.
@@ -699,7 +707,8 @@ def evolve_orbit(host, prog ,tsteps=None,
             prog_masses.append(prog_mass)
             prog_mstars.append(prog_mstar)
 
-            host_disk_masses.append(host_disk_mass)
+            if host.has_disk:
+                host_disk_masses.append(host_disk_mass)
         else:
             # No mass evolution
             prog_masses.append(prog_mass_init)
@@ -713,7 +722,8 @@ def evolve_orbit(host, prog ,tsteps=None,
     retdict['prog_masses'] = np.array(prog_masses)   
     retdict['prog_mstars'] = np.array(prog_mstars)  
     retdict['status']      = np.array(prog_status) 
-    retdict['host_disk_masses'] = np.array(host_disk_masses)   
+    if host.has_disk:
+        retdict['host_disk_masses'] = np.array(host_disk_masses)
     retdict['radii']       = np.array(radii)
     retdict['tsteps']      = tsteps
     retdict['tage']        = host.t_age[initial_level] + tsteps
