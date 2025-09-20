@@ -1,6 +1,6 @@
 import sys
 import os
-from time import time
+import time
 
 import numpy as np
 import tables as tb
@@ -24,7 +24,7 @@ matplotlib.rcParams['text.usetex'] = True
 matplotlib.rcParams['font.family'] = 'serif'
 
 ###########################################################
-def write_results(results, filename):
+def write_results(results, tree_data, params, filename):
     """
     """
     ntrees    = len(results)
@@ -42,18 +42,43 @@ def write_results(results, filename):
         total_results['tree_idx'].append(np.repeat(results[itree]['itree'],results[itree]['nprog']))
 
     for k in data_keys:
-        
         total_results[k] = np.concatenate(total_results[k],axis=0)
     total_results['tree_idx'] = np.concatenate(total_results['tree_idx'])
 
     total_nprog = len(total_results['tree_idx'])
 
+    tree_array_2d_properties = ['main_branch_halo_mass', 'main_branch_disk_mass', 'main_branch_disk_reff']
+
+    # Reshape main branch arrays
+    nlev = params['nlev']
+
+    tree_results = dict()
+    for k in tree_array_2d_properties:
+        temp = np.zeros((ntrees,nlev),dtype=np.float32)
+        for itree,_tree_data in enumerate(tree_data):
+            temp[itree,:] = _tree_data[k]
+        tree_results[k] = temp
+    
+    for k in tree_data[0].keys():
+        if not k in tree_array_2d_properties:
+            tree_results[k] = np.array([_[k] for _ in tree_data])
+    
     with h5py.File(filename, "w") as f:
         f["/"].create_group('Progenitors')
         for k, v in total_results.items():
             print("Writing {} data...".format(k))
             f["/Progenitors"].create_dataset(k, data=v, compression=6) 
-            
+           
+        f["/"].create_group('MainBranches')
+        for k, v in tree_results.items():
+            print("Writing {} data...".format(k))
+            f["/MainBranches"].create_dataset(k, data=v, compression=6) 
+
+        f["/"].create_group('Parameters')
+        for k, v in params.items():
+            print("Writing parameter {}...".format(k))
+            f["/Parameters"].create_dataset(k, data=np.atleast_1d(v)) 
+
     print('Wrote {:s}'.format(filename))
     return
 
@@ -66,19 +91,21 @@ def process_tree(itree ,fd=0.0 ,flattening=25.,
                  tree_main_branch_masses=None,
                  tree_redshifts=None,
                  cosmology=None,
-                 n_substeps=None):
+                 n_substeps=None,
+                 nprogs_max=None,
+                 verbose=False):
     """
     """
-    from time import sleep
+    # from time import sleep 
+    # sleep(3)
+    t_start = time.time()
     
-    sleep(3)
-    t_start = time()
-    
+    # These should be set in the sgarrak.py module
     # SATGEN.cfg implicitly sets resolution limits on mass (absolute and relative) and radius
     # Set them explicitly here; these are the degaults
-    cfg.Mres    = 100.0
-    cfg.Rres    = 0.001
-    cfg.psi_res = 1.0e-5
+    #cfg.Mres    = 100.0
+    #cfg.Rres    = 0.001
+    #cfg.psi_res = 1.0e-5
     
     nsteps = 200
 
@@ -92,17 +119,24 @@ def process_tree(itree ,fd=0.0 ,flattening=25.,
     host = sga.Host(host_mass_history, tree_redshifts, cosmology,
                     fd=fd, flattening=flattening, output_zred=output_zred,
                     disk_method=disk_method,walk_tree=walk_tree)
-    
+   
     # Define result keys once
     result_keys = [
-        'prog_masses', 'prog_mstars', 'host_disk_masses', 'status', 'radii', 'tsteps', 'tage',
+        'prog_masses', 'prog_mstars', 'status', 'radii', 'tsteps', 'tage',
         'levels_at_tsteps', 'coors', 'has_galaxy'
     ]
+
+    if host.has_disk:
+        result_keys.append('host_disk_masses')
 
     # Initialize results dict with empty lists
     results = {key: [] for key in result_keys}
     
-    for iprog in range(0,nprogs_this_tree):
+    if nprogs_max is None:
+        nprogs_max = nprogs_this_tree
+    
+    for iprog in range(0,nprogs_max): 
+        start_time = time.perf_counter()
 
         prog_mass = progenitors['ProgenitorMass'][progs_this_tree][iprog]
         prog_ilev = progenitors['ProgenitorIlev'][progs_this_tree][iprog]
@@ -120,14 +154,25 @@ def process_tree(itree ,fd=0.0 ,flattening=25.,
 
         for key in result_keys:
             results[key].append(solution[key])
-
         
+        end_time = time.perf_counter()
+        elapsed_time = end_time - start_time
+        if verbose:
+            print(f"Progenitor {iprog+1:d} of {nprogs_this_tree:d} -- {elapsed_time:.4f}s")
+ 
     results['nprog'] = len(results['prog_masses'])
-    
-    t_end = time()
-    results['t_proc'] = t_end - t_start
     results['itree']  = itree
-    return results
+    
+    t_end = time.time()
+    
+    tree_data = dict()
+    tree_data['main_branch_halo_mass'] = host_mass_history
+    tree_data['t_proc'] = t_end - t_start
+    if host.has_disk:
+        tree_data['main_branch_disk_mass'] = host.disk_mass
+        tree_data['main_branch_disk_reff'] = host.disk_reff
+
+    return results, tree_data
 
 ###########################################################
 def main(args,client=None):
@@ -146,10 +191,12 @@ def main(args,client=None):
         ncpus = 1 
     print('Available cores: {:d}'.format(ncpus))
     
-    sleep(5)
+    if args.ncores > 1:
+        sleep(5)
     
     # Millennium
-    cosmology = cosmo.FlatLambdaCDM(args.hubble_parameter*100,0.25)
+    hubble_parameter = 0.73
+    cosmology = cosmo.FlatLambdaCDM(hubble_parameter*100,0.25)
 
     print('Cosmology:', cosmology)
     
@@ -157,20 +204,19 @@ def main(args,client=None):
     print('Reading {:s}'.format(tree_file))
     
     # Read main branch mass histories (immediately deal with little h)    
-    tree_main_branch_masses = sga.read_hdf5(tree_file,'/Mainbranch/MainbranchMass')/args.hubble_parameter
+    tree_main_branch_masses = sga.read_hdf5(tree_file,'/Mainbranch/MainbranchMass')/hubble_parameter
 
     # Number of treees and tree levels
     ntrees, nlev = tree_main_branch_masses.shape
 
     print('{:d} trees, {:d} levels'.format(ntrees,nlev))
     
-    
     # Read progenitor data (immediately deal with little h on masses)
     progenitor_dataset_names = ["HostMass","ProgenitorZred","ProgenitorMass","ProgenitorIlev","TreeID"]
     
     progenitors = sga.read_hdf5(tree_file, progenitor_dataset_names, group='/Progenitors')
-    progenitors['ProgenitorMass'] = progenitors['ProgenitorMass']/args.hubble_parameter
-    progenitors['HostMass']       = progenitors['HostMass']/args.hubble_parameter
+    progenitors['ProgenitorMass'] = progenitors['ProgenitorMass']/hubble_parameter
+    progenitors['HostMass']       = progenitors['HostMass']/hubble_parameter
 
     tree_redshifts = sga.read_hdf5(tree_file,'Redshift',group='/OutputTimes')
     tree_t_lbk_gyr = cosmology.lookback_time(tree_redshifts).value
@@ -185,38 +231,35 @@ def main(args,client=None):
                                    progenitors=progenitors,
                                    tree_main_branch_masses=tree_main_branch_masses,
                                    tree_redshifts=tree_redshifts,
-                                   cosmology=cosmology)    
+                                   cosmology=cosmology,
+                                   nprogs_max=args.nprogs,
+                                   verbose=True)    
     print('Processing...')
-    t_start = time()
-    
-    pool      = Pool(processes=ncpus)
-    results   = list()
-    chunksize = 2
-    NMAX      = ntrees
-    print('Running {:d} trees'.format(NMAX))
-    print("{:10s} | {:10s} | {:6s}".format("IDX", "ITREE", "TIME"))
-    for i, _ in enumerate(pool.imap_unordered(partial_process_tree, range(NMAX), chunksize)):
-        print("{:10d} | {:10d} | {:6.2f}s".format(i, _['itree'], _['t_proc']))
-        sys.stdout.flush()
-        results.append(_)
+    t_start = time.time()
+   
+    if args.ntrees is not None:
+        ntrees_max = args.ntrees
+    else:
+        ntrees_max = ntrees
 
-    print('Total time: {:g}'.format(time() - t_start))
-    
-    # results = pool.map(partial_process_tree, range(0,8))
-      
-    #for itree in range(0,ntrees):
-    #    print(itree)
-    #    R = process_tree(itree,
-    #                progenitors=progenitors,
-    #                tree_main_branch_masses=tree_main_branch_masses,
-    #                tree_redshifts=tree_redshifts,
-    #                cosmology=cosmology)
-    #    results.append(R)
-     
-    write_results(results, args.output)
+    results = list()
+    tree_data = list()
+    for itree in range(0,ntrees_max):
+        print()
+        print('Tree {:d} of {:d}'.format(itree+1,ntrees_max))
+        print()
+        results_this_tree, tree_data_this_tree = partial_process_tree(itree)
+        results.append(results_this_tree)
+        tree_data.append(tree_data_this_tree)
+
+    t_end = time.time()
+    print('Total processing time {:f}s'.format(t_end-t_start))
+
+    params = dict()
+    params['nlev'] = nlev
+
+    write_results(results, tree_data, params, args.output)
     print('Done!')
-
-
 
 ###########################################################
 def parse_args():
@@ -224,14 +267,14 @@ def parse_args():
     parser.add_argument("tree_file", help="Input PCHTrees file (PFOP run)")
     parser.add_argument("--ncores","-n", help="Number of cores", default=1, type=int)
     parser.add_argument("--substeps","-s", help="Number of substeps", default=None, type=int)
-    parser.add_argument("--fd","-fd",help="Disk mass ratio",default=0.0, type=float)
-    parser.add_argument("--flattening","-ft",help="disk scale length/scale height",default=25.,type=float)
-    parser.add_argument("--disk_method","-dm",help="fd, no, interp_sm, interp, step, interp_zavg",default="fd", type=str)
-    parser.add_argument("--walk_tree","-wt",help="backward or forward",default="backward", type=str)
-    parser.add_argument("--output","-o", help="Output filename", default='all_progenitors.hdf5')
-    parser.add_argument("--hubble","-H", help="H0 hubble constant", default=0.73,type=float)
+    parser.add_argument("--fd",help="Disk mass ratio",default=0.1, type=float)
+    parser.add_argument("--flattening",help="disk scale length/scale height",default=25.,type=float)
+    parser.add_argument("--disk_method",help="fd, no, interp_sm, interp, step, interp_zavg",default="fd", type=str)
+    parser.add_argument("--walk_tree",help="backward or forward",default="backward", type=str)
+    parser.add_argument("--output","-o", help="Output filename", default='test_all_progenitors.hdf5')
+    parser.add_argument("--nprogs", help="Only process a fixed number of progenitors per tree", default=None, type=int)
+    parser.add_argument("--ntrees", help="Only process a fixed number of trees", default=None, type=int)
     return parser.parse_args()
-
 
 ###########################################################
 if __name__ == '__main__':
