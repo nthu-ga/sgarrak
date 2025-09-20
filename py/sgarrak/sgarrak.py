@@ -223,26 +223,27 @@ class Host():
 
             mean_sm_z0   = 10**gh.lgMs_B13(np.log10(self.mass[0]),z=0.)
             mean_sm_nlev = 10**gh.lgMs_B13(np.log10(self.mass[self.nlev-1]),self.zred[self.nlev-1])
-            
-            idx_iter = range(self.nlev) if walk_tree == 'backward' else reversed(range(self.nlev))
-            
+ 
             if walk_tree == 'backward':
                 starting_disk_mass = init.Mstar(self.mass[0], self.zred[0], choice='B13')
             else:
-                starting_disk_mass = init.Mstar(self.mass[self.nlev-1], 
-                                                self.zred[self.nlev-1], choice='B13')
-            #istarting_disk_mass = (
-            #    init.Mstar(self.mass[0], self.zred[0], choice='B13')
-            #    if walk_tree == 'backward' else init.Mstar(self.mass[self.nlev-1], 
-            #                                               self.zred[self.nlev-1], choice='B13'))
+                # Assign starting mass in the iteration
+                starting_disk_mass = 0
+                #starting_disk_mass = init.Mstar(self.mass[self.nlev-1], 
+                #                                self.zred[self.nlev-1], choice='B13')
 
-            next_disk_mass = starting_disk_mass
+            prev_disk_mass = starting_disk_mass
 
-            self.disk_mass = []
-            self.disk_dens_profile = []
+            self.disk_mass = list()
+            self.disk_reff = list()
+            self.disk_dens_profile = list()
             
             # Including the disk potential
             # .rh: halo radius within which density is Delta times rhoc [kpc]
+
+            # idx_iter is the order in which stellar masses are computed
+            idx_iter = range(self.nlev) if walk_tree == 'backward' else reversed(range(self.nlev))
+            
             for i in idx_iter:
                 
                 mass_i = self.mass[i]
@@ -258,23 +259,32 @@ class Host():
                 if disk_method=='interp':
                     # Use z=0 SMHM relation to linearly scale down the stellar mass
                     # with the difference of the halo masses.
-                    disk_mass = (starting_disk_mass * (mass_i/self.mass[0])
-                                if walk_tree == 'backward'
-                                else starting_disk_mass * (mass_i/self.mass[self.nlev-1]))
+                    if walk_tree == 'backward':
+                        disk_mass = starting_disk_mass * (mass_i/self.mass[0])
+                    else:
+                        disk_mass = starting_disk_mass * (mass_i/self.mass[self.nlev-1])
                     self.disk_mass.append(disk_mass)
+                    self.disk_reff.append(Reff)
+
                 elif disk_method == 'interp_zavg':
                     # Averaging redshift scatter of SMHM.
-                    avg_fit = avg_smhm()
+                    # Ignore starting_disk_mass
+                    avg_fit   = avg_smhm()
                     disk_mass = avg_fit(mass_i)
                     self.disk_mass.append(disk_mass)
+                    self.disk_reff.append(Reff)
+
                 elif disk_method == 'interp_sm':
                     # Use the mean z=0 SMHM relation to get the stellar mass difference.
                     # And use the difference to scale down the z=0 disk mass.
                     mean_sm_ilev = 10**gh.lgMs_B13(np.log10(mass_i),z_i)
-                    disk_mass = (starting_disk_mass * (mean_sm_ilev/mean_sm_z0)
-                                if walk_tree == 'backward'
-                                else starting_disk_mass * (mean_sm_ilev/mean_sm_nlev))
+                    if walk_tree == 'backward':
+                        disk_mass = starting_disk_mass * (mean_sm_ilev/mean_sm_z0)
+                    else:
+                        disk_mass = starting_disk_mass * (mean_sm_ilev/mean_sm_nlev)
                     self.disk_mass.append(disk_mass)
+                    self.disk_reff.append(Reff)
+
                 #elif disk_method == 'roll_dice':
                 #    # Take the stellar mass as long as it goes up in the past
                 #    # If init.Mstar finds a higher mass, do it again.
@@ -289,42 +299,59 @@ class Host():
                 #        disk_mass = init.Mstar(mass_i,z_i, choice='B13')
                 #    self.disk_mass.append(disk_mass)
                 #    later_disk_mass = disk_mass
+
                 elif disk_method == 'step':
                     # Similar to roll dice, but only roll the dice once.
-                    # If the previous disk mass is higher, it remains.
-                    # For the forward method, also apply disk growth if 
-                    # the halo mass is above the cooling threshold.
+                    # If the previous disk mass is higher, we propagate that mass forwards.
+                    # (i.e. the disk does not grow)
+
+                    # The disk size does not depend on the disk mass
+                    self.disk_reff.append(Reff)
                     
-                    disk_mass = init.Mstar(mass_i,z_i, choice='B13')
+                    # For the forward method, we also required that the disk
+                    # mass only grows if the halo mass is above the cooling
+                    # threshold.
+                    disk_mass = init.Mstar(mass_i, z_i, choice='B13')
                     grow_disk = threshold_check(mass_i,z_i)
-                    if walk_tree=='backward':
-                        if next_disk_mass>=disk_mass:
+
+                    if walk_tree == 'backward':
+                        # We have drawn a disk mass for an earlier time
+                        if disk_mass <= prev_disk_mass:
+                            # Disk was less massive in the past;
+                            # accept the mass drawn and update prev_disk_mass
+                            # for the next step.
                             self.disk_mass.append(disk_mass)
-                            next_disk_mass = disk_mass
+                            prev_disk_mass = disk_mass
                         else:
-                            self.disk_mass.append(next_disk_mass)
-                            next_disk_mass = next_disk_mass
-                    else:
-                        if next_disk_mass<=disk_mass:
-                            if grow_disk==1:
+                            # Disk can't be more massive in the past;
+                            # force no change in mass for this step.
+                            self.disk_mass.append(prev_disk_mass)
+                    else: 
+                        # We have drawn a disk mass for a later time
+                        if disk_mass >= prev_disk_mass:
+                            if grow_disk == 1:
+                                # The halo can cool gas, disk grows
                                 self.disk_mass.append(disk_mass)
-                                next_disk_mass = disk_mass
+                                prev_disk_mass = disk_mass
                             else:
-                                self.disk_mass.append(next_disk_mass)
-                                next_disk_mass = next_disk_mass
+                                # The halo can't cool gas, no growth
+                                self.disk_mass.append(prev_disk_mass)
                         else:
-                            self.disk_mass.append(next_disk_mass)
-                            next_disk_mass = next_disk_mass
+                            # Disk can't be less massive in the future;
+                            # force no change in mass for this step.
+                            self.disk_mass.append(prev_disk_mass)
+
                 elif disk_method == 'fd':
-                    # Use a fix disk mass fraction
+                    # Use a fixed disk mass fraction
                     disk_mass = fd * mass_i
                     self.disk_mass.append(disk_mass)
+                    self.disk_reff.append(Reff)
                 else:
-                    raise ValueError("disk method not supported")
+                    raise ValueError(f"Disk method {disk_mathod:s} not supported")
                 
                 disk_profile = MN(disk_mass,scale_radius,scale_height)
 
-                # Pre-generate the interpolator for M(<r)
+                # Pre-generate the interpolator for M(<r) by computing M(<10kpc)
                 disk_profile.M(10,0)
 
                 self.dens_profile.append([halo_profile, disk_profile])
@@ -345,6 +372,7 @@ class Host():
         if self.has_disk:
             if walk_tree != 'backward':
                 self.disk_mass = self.disk_mass[::-1]
+                self.disk_reff = self.disk_reff[::-1]
                 self.dens_profile = self.dens_profile[::-1]
                 self.halo_dens_profile = self.halo_dens_profile[::-1]
                 self.disk_dens_profile = self.disk_dens_profile[::-1]
