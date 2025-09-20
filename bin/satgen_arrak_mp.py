@@ -12,13 +12,13 @@ from astropy.table import Table
 
 import copy
 
-SATGEN_PATH = '/data/chungwen/SatGen'
-if not SATGEN_PATH in sys.path:
-    sys.path.append(SATGEN_PATH)
-
-SATGEN_ETC_PATH = '/data/chungwen/SatGen/etc'
-if not SATGEN_ETC_PATH in sys.path:
-    sys.path.append(SATGEN_ETC_PATH)
+#SATGEN_PATH = '/data/chungwen/SatGen'
+#if not SATGEN_PATH in sys.path:
+#    sys.path.append(SATGEN_PATH)
+#
+#SATGEN_ETC_PATH = '/data/chungwen/SatGen/etc'
+#if not SATGEN_ETC_PATH in sys.path:
+#    sys.path.append(SATGEN_ETC_PATH)
 
 # SatGen Imports
 import config as cfg
@@ -171,8 +171,7 @@ def main(args,client=None):
     sleep(5)
     
     # Millennium
-    hubble_parameter = 0.73
-    cosmology = cosmo.FlatLambdaCDM(hubble_parameter*100,0.25)
+    cosmology = cosmo.FlatLambdaCDM(args.hubble_parameter*100,0.25)
 
     print('Cosmology:', cosmology)
     
@@ -180,7 +179,7 @@ def main(args,client=None):
     print('Reading {:s}'.format(tree_file))
     
     # Read main branch mass histories (immediately deal with little h)    
-    tree_main_branch_masses = sga.read_hdf5(tree_file,'/Mainbranch/MainbranchMass')/hubble_parameter
+    tree_main_branch_masses = sga.read_hdf5(tree_file,'/Mainbranch/MainbranchMass')/args.hubble_parameter
 
     # Number of treees and tree levels
     ntrees, nlev = tree_main_branch_masses.shape
@@ -192,8 +191,8 @@ def main(args,client=None):
     progenitor_dataset_names = ["HostMass","ProgenitorZred","ProgenitorMass","ProgenitorIlev","TreeID"]
     
     progenitors = sga.read_hdf5(tree_file, progenitor_dataset_names, group='/Progenitors')
-    progenitors['ProgenitorMass'] = progenitors['ProgenitorMass']/hubble_parameter
-    progenitors['HostMass']       = progenitors['HostMass']/hubble_parameter
+    progenitors['ProgenitorMass'] = progenitors['ProgenitorMass']/args.hubble_parameter
+    progenitors['HostMass']       = progenitors['HostMass']/args.hubble_parameter
 
     tree_redshifts = sga.read_hdf5(tree_file,'Redshift',group='/OutputTimes')
     tree_t_lbk_gyr = cosmology.lookback_time(tree_redshifts).value
@@ -252,6 +251,7 @@ def parse_args():
     parser.add_argument("--disk_method","-dm",help="fd, no, interp_sm, interp, step, interp_zavg",default="fd", type=str)
     parser.add_argument("--walk_tree","-wt",help="backward or forward",default="backward", type=str)
     parser.add_argument("--output","-o", help="Output filename", default='all_progenitors.hdf5')
+    parser.add_argument("--hubble","-H", help="H0 hubble constant", default=0.73,type=float)
     return parser.parse_args()
 
 
