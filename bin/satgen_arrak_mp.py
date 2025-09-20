@@ -256,7 +256,9 @@ def main(args,client=None):
         for i, _ in enumerate(pool.imap_unordered(partial_process_tree, range(ntrees_max), chunksize)):
             print("{:10d} | {:10d} | {:6.2f}s".format(i, _['itree'], _['t_proc']))
             sys.stdout.flush()
-            results.append(_)
+            results_this_tree, tree_data_this_tree = _
+            results.append(results_this_tree)
+            tree_data.append(tree_data_this_tree)
 
     t_end = time.time()
     print('Total processing time {:f}s'.format(t_end-t_start))
