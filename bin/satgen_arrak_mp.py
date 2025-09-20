@@ -98,7 +98,7 @@ def process_tree(itree ,fd=0.0 ,flattening=25.,
     from time import sleep
     
     sleep(3)
-    t_start = time.time()
+    t_start = time.perf_counter()
 
     # These should be set in the sgarrak.py module
     # SATGEN.cfg implicitly sets resolution limits on mass (absolute and relative) and radius
@@ -183,11 +183,16 @@ def main(args,client=None):
     if 'SLURM_CPUS_ON_NODE' in os.environ:
         ncpus = int(os.environ['SLURM_CPUS_ON_NODE'])
     else:
-        ncpus = 1 
+        if args.ncores is None:
+            ncpus = 1 
+            args.ncores=1
+        else:
+            ncpus = args.ncores
     print('Available cores: {:d}'.format(ncpus))
     
     if args.ncores > 1:
-        sleep(5)
+        print(f'Number of cores requested: {args.ncores:d}')
+        sleep(3)
     
     # Millennium
     cosmology = cosmo.FlatLambdaCDM(args.hubble*100,0.25)
@@ -254,9 +259,9 @@ def main(args,client=None):
         print('Running {:d} trees'.format(ntrees_max))
         print("{:10s} | {:10s} | {:6s}".format("IDX", "ITREE", "TIME"))
         for i, _ in enumerate(pool.imap_unordered(partial_process_tree, range(ntrees_max), chunksize)):
-            print("{:10d} | {:10d} | {:6.2f}s".format(i, _['itree'], _['t_proc']))
-            sys.stdout.flush()
             results_this_tree, tree_data_this_tree = _
+            print("{:10d} | {:10d} | {:6.2f}s".format(i, results_this_tree['itree'], results_this_tree['t_proc']))
+            sys.stdout.flush()
             results.append(results_this_tree)
             tree_data.append(tree_data_this_tree)
 
@@ -284,7 +289,7 @@ def main(args,client=None):
 def parse_args():
     parser = argparse.ArgumentParser(description="Satgen for Arrakihs")
     parser.add_argument("tree_file", help="Input PCHTrees file (PFOP run)")
-    parser.add_argument("--ncores","-n", help="Number of cores", default=1, type=int)
+    parser.add_argument("--ncores","-n", help="Number of cores", default=None, type=int)
     parser.add_argument("--substeps","-s", help="Number of substeps", default=None, type=int)
     parser.add_argument("--fd",help="Disk mass ratio",default=0.1, type=float)
     parser.add_argument("--flattening",help="disk scale length/scale height",default=25.,type=float)
