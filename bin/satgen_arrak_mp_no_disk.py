@@ -88,8 +88,7 @@ def process_tree(itree ,fd=0.0 ,flattening=25.,
                  tree_main_branch_masses=None,
                  tree_redshifts=None,
                  cosmology=None,
-                 n_substeps=None,
-                 mstar_shift=None):
+                 n_substeps=None):
     """
     """
     from time import sleep
@@ -118,7 +117,7 @@ def process_tree(itree ,fd=0.0 ,flattening=25.,
     
     # Define result keys once
     result_keys = [
-        'prog_masses', 'prog_mstars', 'host_disk_masses', 'status', 'radii', 'tsteps', 'tage',
+        'prog_masses', 'prog_mstars', 'status', 'radii', 'tsteps', 'tage',
         'levels_at_tsteps', 'coors', 'has_galaxy'
     ]
 
@@ -130,7 +129,7 @@ def process_tree(itree ,fd=0.0 ,flattening=25.,
         prog_mass = progenitors['ProgenitorMass'][progs_this_tree][iprog]
         prog_ilev = progenitors['ProgenitorIlev'][progs_this_tree][iprog]
         # Call the progenitor object
-        prog = sga.Progenitor(prog_mass, host, level=prog_ilev, mstar_shift=mstar_shift)
+        prog = sga.Progenitor(prog_mass, host, level=prog_ilev)
         
         # Define a time step to evolve
         total_time_gyr = prog.infall_t_lbk
@@ -205,7 +204,6 @@ def main(args,client=None):
                                    flattening = args.flattening,
                                    disk_method = args.disk_method,
                                    walk_tree = args.walk_tree,
-                                   mstar_shift = args.mstar_shift,
                                    n_substeps = args.substeps,
                                    progenitors=progenitors,
                                    tree_main_branch_masses=tree_main_branch_masses,
@@ -219,7 +217,7 @@ def main(args,client=None):
 
     results   = list()
     chunksize = 2
-    NMAX      = 2
+    NMAX      = ntrees
     print('Running {:d} trees'.format(NMAX))
     print("{:10s} | {:10s} | {:6s}".format("IDX", "ITREE", "TIME"))
     for i, _ in enumerate(pool.imap_unordered(partial_process_tree, range(NMAX), chunksize)):
@@ -255,7 +253,6 @@ def parse_args():
     parser.add_argument("--flattening","-ft",help="disk scale length/scale height",default=25.,type=float)
     parser.add_argument("--disk_method","-dm",help="fd, no, interp_sm, interp, step, interp_zavg",default="fd", type=str)
     parser.add_argument("--walk_tree","-wt",help="backward or forward",default="backward", type=str)
-    parser.add_argument("--mstar_shift","-msh",help="+-50 percent or so",default=None,type=float)
     parser.add_argument("--output","-o", help="Output filename", default='all_progenitors.hdf5')
     return parser.parse_args()
 

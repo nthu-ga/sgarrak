@@ -214,6 +214,13 @@ class Host():
         else:
             self.concentration = np.atleast_1d(init.concentration(self.mass[0], self.zred[0], choice='DM14'))
             
+
+        # Add a check for those disk_methods don't have forward method, so idx_iter does not accidentally
+        # reverse the index.
+        if disk_method in ('interp_zavg', 'fd'):
+            if walk_tree=='forward':
+                raise ValueError("This disk method does not support forward method.")
+
         # Make a profile for each timestep
         self.dens_profile = list()
         self.halo_dens_profile = list()
@@ -228,9 +235,11 @@ class Host():
             
             if walk_tree == 'backward':
                 starting_disk_mass = init.Mstar(self.mass[0], self.zred[0], choice='B13')
-            else:
+            elif walk_tree=='forward':
                 starting_disk_mass = init.Mstar(self.mass[self.nlev-1], 
                                                 self.zred[self.nlev-1], choice='B13')
+            else:
+                raise ValueError("walk tree method not supported")
             #istarting_disk_mass = (
             #    init.Mstar(self.mass[0], self.zred[0], choice='B13')
             #    if walk_tree == 'backward' else init.Mstar(self.mass[self.nlev-1], 
@@ -342,7 +351,7 @@ class Host():
                 self.halo_dens_profile.append(halo_profile)
 
         # Reverse the array for forward method, so no need to change other function.
-        if self.has_disk:
+        if disk_method in ('step', 'interp', 'interp_sm'):
             if walk_tree != 'backward':
                 self.disk_mass = self.disk_mass[::-1]
                 self.dens_profile = self.dens_profile[::-1]
@@ -386,7 +395,8 @@ def threshold_check(hm,z):
 class Progenitor():
     def __init__(self, mass, host,
                  cosmology=None, zred=None, level=None, mstar=None,
-                 orbit_init_method='li2020', xc=None, eps=None):
+                 orbit_init_method='li2020', xc=None, eps=None,
+                 mstar_shift=None):
         """
         zred_or_level:
         """
@@ -453,7 +463,12 @@ class Progenitor():
 
         # Draw stellar mass from mstar-mhalo releation
         if mstar is None:
-            self.mstar_init = init.Mstar(self.mass_init, self.zred, choice='B13')
+            if mstar_shift is None:
+                self.mstar_init = init.Mstar(self.mass_init, self.zred, choice='B13')
+            else:
+                # Add a shift on the SMHM relation for progenitors to simulate different 
+                # formation models (?).
+                self.mstar_init = init.Mstar(self.mass_init, self.zred, choice='B13')*mstar_shift
         else:
             self.mstar_init = mstar
         self.mstar = self.mstar_init

@@ -150,7 +150,7 @@ def read_satgen(ver=1):
     if ver==1:
         data_path = dir_path+'reionoutput/'
 
-        output_dataset_names = ['fd01','no','step']#,'interp_sm','interp']
+        output_dataset_names = ['fd01','no','step_forward','step_backward']#,'interp_sm','interp']
         satgen_dataset_names = ['coors','has_galaxy','itree','levels_at_tsteps','nprog',
                                 'prog_masses','prog_mstars','radii','status','t_proc','tage',
                                 'tree_idx','tsteps']
@@ -160,6 +160,26 @@ def read_satgen(ver=1):
             data[odn] = read_hdf5(data_path+'prog_evo_1000_mixed_logmass_{}_disk.hdf5'.format(odn),
                                   satgen_dataset_names,group='/Progenitors')
 
+    if ver==2:
+        data_path = dir_path+'reionoutput/evolve/'
+
+        output_dataset_names = ['fd01','no','step_forward','step_forward_shift15','step_forward_shift05']#,'interp_sm','interp']
+        satgen_dataset_names = ['coors','has_galaxy','itree','levels_at_tsteps','nprog',
+                                'prog_masses','prog_mstars','host_disk_masses','radii','status','t_proc','tage',
+                                'tree_idx','tsteps']
+
+        for odn in output_dataset_names:
+            print('Building data: ',odn)
+            if odn=='no':
+                satgen_dataset_names = ['coors','has_galaxy','itree','levels_at_tsteps','nprog',
+                                'prog_masses','prog_mstars','radii','status','t_proc','tage',
+                                'tree_idx','tsteps']
+            else:
+                satgen_dataset_names = ['coors','has_galaxy','itree','levels_at_tsteps','nprog',
+                                'prog_masses','prog_mstars','host_disk_masses','radii','status','t_proc','tage',
+                                'tree_idx','tsteps']
+            data[odn] = read_hdf5(data_path+'prog_evo_1000_mixed_logmass_{}_disk.hdf5'.format(odn),
+                                  satgen_dataset_names,group='/Progenitors')
 
     return data    
 #########################################################
@@ -727,7 +747,7 @@ def plot_macc_mstream_funtion(progs,root_mass,task='m_acc'):
     weights = volume_weight(root_mass)
     bins=np.arange(5,13,0.2)
 
-    pl.figure(figsize=(18,7))
+    pl.figure(figsize=(22,10))
     pl.subplot(121)
     for (k,p),c in zip(progs.items(),cs):
         m_acc = compute_mass(p,root_mass,task='m_acc')
