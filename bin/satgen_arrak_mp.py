@@ -17,13 +17,16 @@ import sgarrak.sgarrak as sga
 import argparse
 import h5py
 
+from functools import partial
+from time import sleep
+ 
 import matplotlib.pyplot as pl
 import matplotlib
 matplotlib.rcParams['text.usetex'] = True
 matplotlib.rcParams['font.family'] = 'serif'
 
 ###########################################################
-def write_results(results, tree_data, params, filename):
+def write_results(results, tree_data, params, output_times, filename,reorder=None):
     """
     """
     ntrees    = len(results)
@@ -46,7 +49,13 @@ def write_results(results, tree_data, params, filename):
 
     total_nprog = len(total_results['tree_idx'])
 
-    tree_array_2d_properties = ['main_branch_halo_mass', 'main_branch_disk_mass', 'main_branch_disk_reff']
+    tree_array_2d_properties = [
+            'main_branch_halo_mass', 
+            'main_branch_halo_c',
+            'main_branch_disk_mass', 
+            'main_branch_disk_reff']
+
+    sort_order = reorder if reorder is not None else None
 
     # Reshape main branch arrays
     nlev = params['nlev']
@@ -56,11 +65,16 @@ def write_results(results, tree_data, params, filename):
         temp = np.zeros((ntrees,nlev),dtype=np.float32)
         for itree,_tree_data in enumerate(tree_data):
             temp[itree,:] = _tree_data[k]
+        if sort_order is not None:
+            temp = temp[sort_order,:]
         tree_results[k] = temp
     
     for k in tree_data[0].keys():
         if not k in tree_array_2d_properties:
-            tree_results[k] = np.array([_[k] for _ in tree_data])
+            a = np.array([_[k] for _ in tree_data])
+            if sort_order is not None:
+                a = a[sort_order]
+            tree_results[k] = a
  
     with h5py.File(filename, "w") as f:
         f["/"].create_group('Progenitors')
@@ -72,12 +86,20 @@ def write_results(results, tree_data, params, filename):
         for k, v in tree_results.items():
             print("Writing {} data...".format(k))
             f["/MainBranches"].create_dataset(k, data=v, compression=6) 
+        # Can improve
+        f["/MainBranches"].create_dataset('TreeIdx',data=np.array(reorder)[np.array(reorder)], compression=6) 
 
         f["/"].create_group('Parameters')
         for k, v in params.items():
             print("Writing parameter {}...".format(k))
             f["/Parameters"].create_dataset(k, data=np.atleast_1d(v)) 
-          
+         
+        f["/"].create_group('OutputTimes')
+        for k, v in output_times.items():
+            print("Writing {}...".format(k))
+            f["/OutputTimes"].create_dataset(k, data=np.atleast_1d(v)) 
+
+
     print('Wrote {:s}'.format(filename))
     return
 
@@ -95,9 +117,7 @@ def process_tree(itree ,fd=0.0 ,flattening=25.,
                  verbose=False):
     """
     """
-    from time import sleep
-    
-    sleep(3)
+    #sleep(3)
     t_start = time.perf_counter()
 
     # These should be set in the sgarrak.py module
@@ -162,24 +182,39 @@ def process_tree(itree ,fd=0.0 ,flattening=25.,
 
     tree_data = dict()
     tree_data['main_branch_halo_mass'] = host_mass_history
+    tree_data['main_branch_halo_c']    = host.concentration
     tree_data['t_proc'] = t_end - t_start
     if host.has_disk:
         tree_data['main_branch_disk_mass'] = host.disk_mass
         tree_data['main_branch_disk_reff'] = host.disk_reff
 
+    results['_PID'] = os.getpid()
+
     return results, tree_data
 
 ###########################################################
-def main(args,client=None):
-    """
-    """
-    import multiprocessing
-    from multiprocessing import Pool
-    from functools import partial
-    from time import sleep
-    
-    multiprocessing.set_start_method('fork')
-    
+def parse_args():
+    parser = argparse.ArgumentParser(description="Satgen for Arrakihs")
+    parser.add_argument("tree_file", help="Input PCHTrees file (PFOP run)")
+    parser.add_argument("--ncores","-n", help="Number of cores", default=None, type=int)
+    parser.add_argument("--substeps","-s", help="Number of substeps", default=None, type=int)
+    parser.add_argument("--fd",help="Disk mass ratio",default=0.1, type=float)
+    parser.add_argument("--flattening",help="disk scale length/scale height",default=25.,type=float)
+    parser.add_argument("--disk_method",help="fd, no, interp_sm, interp, step, interp_zavg",default="fd", type=str)
+    parser.add_argument("--walk_tree",help="backward or forward",default="backward", type=str)
+    parser.add_argument("--output","-o", help="Output filename", default='test_all_progenitors.hdf5')
+    parser.add_argument("--nprogs", help="Only process a fixed number of progenitors per tree", default=None, type=int)
+    parser.add_argument("--ntrees", help="Only process a fixed number of trees", default=None, type=int)
+    parser.add_argument("--hubble","-H", help="H0 hubble constant", default=0.73,type=float)
+    parser.add_argument("--serial", help="Execute in serial, no multithreading",action="store_true")
+    return parser.parse_args()
+
+###########################################################
+if __name__ == '__main__':
+    args = parse_args()
+    # multiprocessing.set_start_method("forkserver")
+    # multiprocessing.set_start_method('fork')
+   
     if 'SLURM_CPUS_ON_NODE' in os.environ:
         ncpus = int(os.environ['SLURM_CPUS_ON_NODE'])
     else:
@@ -192,7 +227,7 @@ def main(args,client=None):
     
     if args.ncores > 1:
         print(f'Number of cores requested: {args.ncores:d}')
-        sleep(3)
+        #sleep(3)
     
     # Millennium
     cosmology = cosmo.FlatLambdaCDM(args.hubble*100,0.25)
@@ -235,16 +270,17 @@ def main(args,client=None):
                                    verbose=True)    
  
     print('Processing...')
-    t_start = time.time()
+    t_start = time.perf_counter()
     
     if args.ntrees is not None:
         ntrees_max = args.ntrees
     else:
         ntrees_max = ntrees
+    print('Running {:d} trees'.format(ntrees_max))
 
-    pool      = Pool(processes=ncpus)
-    results   = list()
-    tree_data = list()
+    results    = list()
+    tree_data  = list()
+    tree_order = list()
 
     if args.serial:
         for itree in range(0,ntrees_max):
@@ -254,19 +290,26 @@ def main(args,client=None):
             results_this_tree, tree_data_this_tree = partial_process_tree(itree)
             results.append(results_this_tree)
             tree_data.append(tree_data_this_tree)
+            tree_order.append(itree)
     else:
-        chunksize = 2
-        print('Running {:d} trees'.format(ntrees_max))
-        print("{:10s} | {:10s} | {:6s}".format("IDX", "ITREE", "TIME"))
-        for i, _ in enumerate(pool.imap_unordered(partial_process_tree, range(ntrees_max), chunksize)):
-            results_this_tree, tree_data_this_tree = _
-            print("{:10d} | {:10d} | {:6.2f}s".format(i, results_this_tree['itree'], results_this_tree['t_proc']))
-            sys.stdout.flush()
-            results.append(results_this_tree)
-            tree_data.append(tree_data_this_tree)
+        import multiprocessing
+        with multiprocessing.get_context("forkserver").Pool(processes=ncpus) as pool:
+            chunksize = 2
+            print("{:10s} | {:10s} | {:10s} | {:6s}".format("IDX", "ITREE", "PID", "TIME"))
+            for itree, _ in enumerate(pool.imap_unordered(partial_process_tree, range(ntrees_max), chunksize)):
+                results_this_tree, tree_data_this_tree = _
+                print("{:10d} | {:10d} | {:10d} | {:6.2f}s".format(itree, 
+                    results_this_tree['itree'], 
+                    results_this_tree['_PID'],
+                    results_this_tree['t_proc']))
+                sys.stdout.flush()
+                results.append(results_this_tree)
+                tree_data.append(tree_data_this_tree)
+                tree_order.append(itree)
 
-    t_end = time.time()
+    t_end = time.perf_counter()
     print('Total processing time {:f}s'.format(t_end-t_start))
+    print('             Per tree {:f}s'.format((t_end-t_start)/ntrees_max))
 
     # results = pool.map(partial_process_tree, range(0,8))
       
@@ -281,28 +324,19 @@ def main(args,client=None):
     
     params = dict()
     params['nlev'] = nlev
+    #params['treefile'] = str(args.tree_file)
+    params['hubble'] = float(args.hubble)
 
-    write_results(results, tree_data, params, args.output)
+    if args.substeps is not None:
+        params['substeps'] = int(args.substeps)
+    else:
+        params['substeps'] = 0
+
+    output_times = dict()
+    output_times['Redshift'] = tree_redshifts
+    output_times['LookBackTime'] = tree_t_lbk_gyr
+    output_times['AgeOfUniverse'] = tree_t_age_gyr 
+
+    write_results(results, tree_data, params, output_times, args.output,
+            reorder=tree_order)
     print('Done!')
-
-###########################################################
-def parse_args():
-    parser = argparse.ArgumentParser(description="Satgen for Arrakihs")
-    parser.add_argument("tree_file", help="Input PCHTrees file (PFOP run)")
-    parser.add_argument("--ncores","-n", help="Number of cores", default=None, type=int)
-    parser.add_argument("--substeps","-s", help="Number of substeps", default=None, type=int)
-    parser.add_argument("--fd",help="Disk mass ratio",default=0.1, type=float)
-    parser.add_argument("--flattening",help="disk scale length/scale height",default=25.,type=float)
-    parser.add_argument("--disk_method",help="fd, no, interp_sm, interp, step, interp_zavg",default="fd", type=str)
-    parser.add_argument("--walk_tree",help="backward or forward",default="backward", type=str)
-    parser.add_argument("--output","-o", help="Output filename", default='test_all_progenitors.hdf5')
-    parser.add_argument("--nprogs", help="Only process a fixed number of progenitors per tree", default=None, type=int)
-    parser.add_argument("--ntrees", help="Only process a fixed number of trees", default=None, type=int)
-    parser.add_argument("--hubble","-H", help="H0 hubble constant", default=0.73,type=float)
-    parser.add_argument("--serial", help="Execute in serial, no multithreading",action="store_true")
-    return parser.parse_args()
-
-###########################################################
-if __name__ == '__main__':
-    args = parse_args()
-    main(args)
