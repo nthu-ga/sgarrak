@@ -132,7 +132,7 @@ def avg_smhm(n,return_edge=False):
 ############################################################
 class Host():
     def __init__(self, mass, zred, cosmology, fd=0.0, flattening=0., disk_method='fd',
-                 output_zred=None, walk_tree='backward'):
+                 output_zred=None, walk_tree='backward', cooling_threshold=True, z0_smhm=False):
         """
         
         Parameters: fd: disk mass fraction
@@ -319,10 +319,15 @@ class Host():
                     # The disk size does not depend on the disk mass
                     self.disk_reff.append(Reff)
                     
-                    # For the forward method, we also required that the disk
-                    # mass only grows if the halo mass is above the cooling
+                    # For the forward method, we can require that the disk
+                    # mass only grows if a halo mass is above the cooling
                     # threshold.
-                    disk_mass = init.Mstar(mass_i, z_i, choice='B13')
+
+                    # Adds disk mass with z0 SMHM relation for checking.
+                    if z0_smhm: 
+                        disk_mass = init.Mstar(mass_i, z=0, choice='B13')
+                    else:
+                        disk_mass = init.Mstar(mass_i, z_i, choice='B13')
                     grow_disk = threshold_check(mass_i,z_i)
 
                     if walk_tree == 'backward':
@@ -340,13 +345,18 @@ class Host():
                     else: 
                         # We have drawn a disk mass for a later time
                         if disk_mass >= prev_disk_mass:
-                            if grow_disk == 1:
-                                # The halo can cool gas, disk grows
+                            # Check additional cooling threshold to grow disk mass
+                            if cooling_threshold:
+                                if grow_disk == 1:
+                                    # The halo can cool gas, disk grows
+                                    self.disk_mass.append(disk_mass)
+                                    prev_disk_mass = disk_mass
+                                else:
+                                    # The halo can't cool gas, no growth
+                                    self.disk_mass.append(prev_disk_mass)
+                            else:
                                 self.disk_mass.append(disk_mass)
                                 prev_disk_mass = disk_mass
-                            else:
-                                # The halo can't cool gas, no growth
-                                self.disk_mass.append(prev_disk_mass)
                         else:
                             # Disk can't be less massive in the future;
                             # force no change in mass for this step.
