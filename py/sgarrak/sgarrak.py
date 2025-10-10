@@ -139,7 +139,8 @@ def mod_Mstar(hm,h=0.73,z=0.,choice='B13',task='Mstar'):
         hm *= (h/h_model)
         raise NotImplementedError('B19: Not provide now')
 
-    return sm *= (h_model/h)
+    sm *= (h_model/h)
+    return sm 
 
 
 ############################################################
