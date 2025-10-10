@@ -94,39 +94,52 @@ def is_iterable(x):
     return False
 
 ############################################################
-def avg_smhm(n,return_edge=False):
+def mod_Mstar(hm,h=0.73,z=0.,choice='B13',task='Mstar'):
     """
-    Averaged stellar masses given redshifts and halo masses.
-    By drawing N number of random samples with different z
-    for each halo mass.
+    Customized Mstar 
+    The halo mass from our eps tree already dealt with h
     
-    The halo mass range was chosen by min-cfg.mres max-max tree mass
-    
-    Note init.Mstar reads linear halo mass
-    
+    B13 assumed parameters: Omega_M = 0.27
+                            Omega_lambda = 0.73
+                            h = 0.7
+                            ns = 0.95
+                            sigma8 = 0.82
+
+    B19 assumed parameters: h = 0.678
+
+    Parameters: h: Hubble parameter assumed in the merger tree
+                hm: linear halo mass
+
+    Return: linear stellar mass
+
     """
-    zrange  = np.arange(0,14,0.2)
-    N = n
-    Nz = np.random.choice(zrange,N)
-    
-    hmrange = 10**np.arange(2,13,0.5)
 
-    avgsm = []
-    maxsm = []
-    minsm = []
+    if choice=='B13':
+        h_model = 0.7
+        hm *= (h/h_model)
+        if task=='Mstar':
+            sm = init.Mstar(hm,z,choice=choice)
+        elif task=='lgMs_B13':
+            sm = 10**gh.lgMs_B13(np.log10(hm),z)
+        else:
+            raise ValueError(f"Invalid task '{task}' for choice 'B13'")
+        
+    elif choice=='RP17':
+        h_model = 0.7 # Not used, needs to check
+        hm *= (h/h_model)
+        if task=='Mstar':
+            sm = init.Mstar(hm,z,choice=choice)
+        elif task=='lgMs_RP17':
+            sm = 10**gh.lgMs_RP17(np.log10(hm),z)
+        else:
+            raise ValueError(f"Invalid task '{task}' for choice 'RP17'")
 
-    for hm in hmrange:
-        smlist = [init.Mstar(hm,z, choice='B13') for z in Nz]
-        avgsm.append(np.median(smlist))
-        maxsm.append(max(smlist))
-        minsm.append(min(smlist))
+    elif choice=='B19':
+        h_model = 0.678
+        hm *= (h/h_model)
+        raise NotImplementedError('B19: Not provide now')
 
-    f = interp1d(hmrange,avgsm)
-
-    if return_edge:
-        return np.array(maxsm),np.array(minsm),hmrange
-
-    return f
+    return sm *= (h_model/h)
 
 
 ############################################################
@@ -219,7 +232,7 @@ class Host():
         # reverse the index.
         if disk_method in ('interp_zavg', 'fd'):
             if walk_tree=='forward':
-                raise ValueError("This disk method does not support forward method.")
+                raise ValueError(f"This disk method '{disk_method}' does not support forward method.")
 
         # Make a profile for each timestep
         self.dens_profile = list()
@@ -228,11 +241,11 @@ class Host():
 
         if self.has_disk:
 
-            mean_sm_z0   = 10**gh.lgMs_B13(np.log10(self.mass[0]),z=0.)
-            mean_sm_nlev = 10**gh.lgMs_B13(np.log10(self.mass[self.nlev-1]),self.zred[self.nlev-1])
+            mean_sm_z0   = mod_Mstar(self.mass[0],h=0.73,z=0.,choice='B13',task='lgMs_B13')
+            mean_sm_nlev = mod_Mstar(self.mass[self.nlev-1],h=0.73,z=self.zred[self.nlev-1],choice='B13',task='lgMs_B13')
  
             if walk_tree == 'backward':
-                starting_disk_mass = init.Mstar(self.mass[0], self.zred[0], choice='B13')
+                starting_disk_mass = mod_Mstar(self.mass[0],h=0.73,z=self.zred[0], choice='B13',task='Mstar')
             elif walk_tree=='forward':
                 # Assign starting mass in the iteration
                 starting_disk_mass = 0
@@ -241,7 +254,7 @@ class Host():
             else:
                 # Add a safety check so that the arrays are not reverted for disk methods 
                 # that do not have forward method
-                raise ValueError("walk tree method not supported")
+                raise ValueError(f"walk tree method '{walk_tree}'  not supported")
 
             prev_disk_mass = starting_disk_mass
 
@@ -277,18 +290,10 @@ class Host():
                     self.disk_mass.append(disk_mass)
                     self.disk_reff.append(Reff)
 
-                elif disk_method == 'interp_zavg':
-                    # Averaging redshift scatter of SMHM.
-                    # Ignore starting_disk_mass
-                    avg_fit   = avg_smhm()
-                    disk_mass = avg_fit(mass_i)
-                    self.disk_mass.append(disk_mass)
-                    self.disk_reff.append(Reff)
-
                 elif disk_method == 'interp_sm':
                     # Use the mean z=0 SMHM relation to get the stellar mass difference.
                     # And use the difference to scale down the z=0 disk mass.
-                    mean_sm_ilev = 10**gh.lgMs_B13(np.log10(mass_i),z_i)
+                    mean_sm_ilev = mod_Mstar(mass_i,h=0.73,z=z_i,choice='B13',task='lgMs_B13')
                     if walk_tree == 'backward':
                         disk_mass = starting_disk_mass * (mean_sm_ilev/mean_sm_z0)
                     else:
@@ -325,9 +330,9 @@ class Host():
 
                     # Adds disk mass with z0 SMHM relation for checking.
                     if z0_smhm: 
-                        disk_mass = init.Mstar(mass_i, z=0, choice='B13')
+                        disk_mass = mod_Mstar(mass_i,h=0.73,z=0.,choice='B13',task='Mstar')
                     else:
-                        disk_mass = init.Mstar(mass_i, z_i, choice='B13')
+                        disk_mass = mod_Mstar(mass_i,h=0.73,z=z_i,choice='B13',task='Mstar')
                     grow_disk = threshold_check(mass_i,z_i)
 
                     if walk_tree == 'backward':
@@ -347,7 +352,7 @@ class Host():
                         if disk_mass >= prev_disk_mass:
                             # Check additional cooling threshold to grow disk mass
                             if cooling_threshold:
-                                if grow_disk == 1:
+                                if grow_disk:
                                     # The halo can cool gas, disk grows
                                     self.disk_mass.append(disk_mass)
                                     prev_disk_mass = disk_mass
@@ -426,10 +431,8 @@ def threshold_check(hm,z):
     else:
         threshold,_ = Tvir_threshold_rez10fit()
     
-    if np.log10(hm)>threshold(z):
-        return 1
+    return np.log10(hm)>threshold(z)
     
-    return 0
 
 ############################################################
 class Progenitor():
@@ -504,11 +507,11 @@ class Progenitor():
         # Draw stellar mass from mstar-mhalo releation
         if mstar is None:
             if mstar_shift is None:
-                self.mstar_init = init.Mstar(self.mass_init, self.zred, choice='B13')
+                self.mstar_init = mod_Mstar(self.mass_init,h=0.73,z=self.zred,choice='B13',task='Mstar')
             else:
                 # Add a shift on the SMHM relation for progenitors to simulate different 
                 # formation models (?).
-                self.mstar_init = init.Mstar(self.mass_init, self.zred, choice='B13')*mstar_shift
+                self.mstar_init = mod_Mstar(self.mass_init,h=0.73,z=self.zred,choice='B13',task='Mstar')*mstar_shift
         else:
             self.mstar_init = mstar
         self.mstar = self.mstar_init
