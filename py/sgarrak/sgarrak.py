@@ -670,6 +670,8 @@ def evolve_orbit(host, prog ,tsteps=None,
         # The reversal is because tree level zero is the root of the tree, not the infall
         # time.
         levels_at_tstep = prog.level - (np.searchsorted(host_times_starting_from_initial_level,tsteps,side='right')-1)
+        # searchsorted right gives 0 for the last element, therefore return -1 in the final element in start_step_level.
+        levels_at_tstep[-1] += 1
 
     if cfg.Mres is None:
         mres_effective = 0

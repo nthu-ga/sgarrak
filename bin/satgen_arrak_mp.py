@@ -28,6 +28,9 @@ matplotlib.rcParams['font.family'] = 'serif'
 ###########################################################
 def write_results(results, tree_data, params, output_times, filename,reorder=None):
     """
+
+    Note: The main_branch_disk_mass is the disk mass along the main branch history.
+          The host_disk_mass is the disk mass a progenitor feels at each tstep.
     """
     ntrees    = len(results)
     data_keys = results[0].keys()
