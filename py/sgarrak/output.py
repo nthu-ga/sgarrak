@@ -198,8 +198,16 @@ def read_satgen(ver=3):
                 main[odn] = read_hdf5(data_path+'prog_evo_1000_mixed_logmass_{}_disk.hdf5'.format(odn),
                                       main_dataset_names,group='/MainBranches')
 
-    
-    if ver==3:
+    elif ver==-1:
+        data_path = dir_path
+
+        prog_dataset_names = ['levels_at_tsteps','host_disk_masses']
+        main_dataset_names = ['main_branch_disk_mass']
+
+        data = read_hdf5(data_path+'test.hdf5',prog_dataset_names,group='/Progenitors')
+        main = read_hdf5(data_path+'test.hdf5',main_dataset_names,group='/MainBranches')
+        
+    if ver==3 or ver==-1:
         return data,main
     else:
         return data   
