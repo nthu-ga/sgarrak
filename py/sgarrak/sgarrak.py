@@ -519,6 +519,7 @@ class Progenitor():
 
         # Check if the progenitor above the cooling threshold at infall.
         # It would be better to check the entire assembly history.
+        # This is only a flag, the prog mstar is still computed by the smhm relation even not above the threshold.
         self.has_galaxy = threshold_check(mass,self.zred)
 
         # The mass within rmax is used in the stripping calculations

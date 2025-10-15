@@ -41,6 +41,7 @@ import astropy.cosmology as cosmo
 from astropy.table import Table
 from functools import partial
 import tables as tb
+from scipy.interpolate import interp1d
 
 # <<< for clean on-screen prints, use with caution, make sure that 
 # the warning is not prevalent or essential for the result
@@ -118,10 +119,10 @@ def read_tree():
 
     root_mass = tree_main_branch_masses[:,0]
 
-    return tree_redshifts,root_mass,progenitors
+    return tree_redshifts,root_mass,progenitors,tree_main_branch_masses
 
 
-def read_satgen(ver=1):
+def read_satgen(ver=3):
     """
     Satgen output files
 
@@ -130,6 +131,13 @@ def read_satgen(ver=1):
                interpdisk: Use the z=0 B13 SMHM relation to get the disk mass,
                            and rescale to the earlier halo mass
     
+    ver: lessoutput: Contains only initial and final outputs
+         ver2: 
+         ver3: Adds main branch infomation
+
+    Notes: host_disk_mass arrays not fixed in ver2 and ver3. 
+           The disk masses of hosts are recorded in MainBranches instead.
+
     TODO: Is there an way to control which file will load first 
           when using os.listdir or glob.glob?
     """
@@ -147,7 +155,7 @@ def read_satgen(ver=1):
             data[odn] = read_hdf5(data_path+'prog_evo_1000_mixed_logmass_{}_lessoutput.hdf5'.format(odn),
                                   satgen_dataset_names,group='/Progenitors')
     
-    if ver==1:
+    elif ver==1:
         data_path = dir_path+'reionoutput/'
 
         output_dataset_names = ['fd01','no','step_forward','step_backward']#,'interp_sm','interp']
@@ -160,28 +168,41 @@ def read_satgen(ver=1):
             data[odn] = read_hdf5(data_path+'prog_evo_1000_mixed_logmass_{}_disk.hdf5'.format(odn),
                                   satgen_dataset_names,group='/Progenitors')
 
-    if ver==2:
+    elif ver==2:
         data_path = dir_path+'reionoutput/evolve/'
 
         output_dataset_names = ['fd01','no','step_forward','step_forward_shift15','step_forward_shift05']#,'interp_sm','interp']
         satgen_dataset_names = ['coors','has_galaxy','itree','levels_at_tsteps','nprog',
-                                'prog_masses','prog_mstars','host_disk_masses','radii','status','t_proc','tage',
+                                'prog_masses','prog_mstars','radii','status','t_proc','tage',
                                 'tree_idx','tsteps']
 
         for odn in output_dataset_names:
             print('Building data: ',odn)
-            if odn=='no':
-                satgen_dataset_names = ['coors','has_galaxy','itree','levels_at_tsteps','nprog',
-                                'prog_masses','prog_mstars','radii','status','t_proc','tage',
-                                'tree_idx','tsteps']
-            else:
-                satgen_dataset_names = ['coors','has_galaxy','itree','levels_at_tsteps','nprog',
-                                'prog_masses','prog_mstars','host_disk_masses','radii','status','t_proc','tage',
-                                'tree_idx','tsteps']
             data[odn] = read_hdf5(data_path+'prog_evo_1000_mixed_logmass_{}_disk.hdf5'.format(odn),
                                   satgen_dataset_names,group='/Progenitors')
 
-    return data    
+    elif ver==3:
+        data_path = dir_path+'reionoutput/evolve_ver2/'
+
+        output_dataset_names = ['no','fd01','step_backward','step_forward','step_forward_threshold_off','step_forward_threshold_off_z0smhm_on']
+        prog_dataset_names = ['coors','has_galaxy','itree','levels_at_tsteps','nprog',
+                                'prog_masses','prog_mstars','radii','status','t_proc','tage',
+                                'tree_idx','tsteps']
+        main_dataset_names = ['main_branch_disk_mass']
+        main = dict()
+        for odn in output_dataset_names:
+            print('Building data: ',odn)
+            data[odn] = read_hdf5(data_path+'prog_evo_1000_mixed_logmass_{}_disk.hdf5'.format(odn),
+                                  prog_dataset_names,group='/Progenitors')
+            if odn != 'no':
+                main[odn] = read_hdf5(data_path+'prog_evo_1000_mixed_logmass_{}_disk.hdf5'.format(odn),
+                                      main_dataset_names,group='/MainBranches')
+
+    
+    if ver==3:
+        return data,main
+    else:
+        return data   
 #########################################################
 ### Physics
 def moster_18_eff_func(m,M1=1,epsilon=0,beta=1,gamma=1):
@@ -296,6 +317,41 @@ def volume_weight(root_mass):
     weights = weights_per_bin[bin_indices]
     
     return weights
+
+def avg_smhm(n,return_edge=False):
+    """
+    Averaged stellar masses given redshifts and halo masses.
+    By drawing N number of random samples with different z
+    for each halo mass.
+    
+    The halo mass range was chosen by min-cfg.mres max-max tree mass
+    
+    Note init.Mstar reads linear halo mass
+    
+    """
+    zrange  = np.arange(0,14,0.2)
+    N = n
+    Nz = np.random.choice(zrange,N)
+
+    hmrange = 10**np.arange(2,13,0.5)
+
+    avgsm = []
+    maxsm = []
+    minsm = []
+
+    for hm in hmrange:
+        smlist = [init.Mstar(hm,z, choice='B13') for z in Nz]
+        avgsm.append(np.median(smlist))
+        maxsm.append(max(smlist))
+        minsm.append(min(smlist))
+
+    f = interp1d(hmrange,avgsm)
+
+    if return_edge:
+        return np.array(maxsm),np.array(minsm),hmrange
+
+    return f
+
 
 # ChatGPT
 def first_pericenter_distance(r):
@@ -495,12 +551,33 @@ def plot_b18(ax,h=0.678,centrals=True,mean_only=False,
 
 def plot_b18_satgen(ax):
     """
+    b18 or b13?
     """
-    maxsm,minsm,hmrange = avg_smhm(300,return_edge=True)
+    maxsm,minsm,hmrange = avg_smhm(1000,return_edge=True)
 
     ax.fill_between(np.log10(hmrange),np.log10(maxsm),np.log10(minsm),
                     alpha=0.5,label='B19')
     
+    return
+
+def plot_b13_satgen(ax):
+    """
+    Similar to the above function but directly uses 0.2 scatter in log sm.
+
+    For each halo mass bins, it takes the highest and lowest value of hm(z) and 
+    add/minus 0.2.
+    """
+    zrange = np.arange(0,14,0.2)
+    hmrange = np.arange(9,12.7,0.2)
+    smmax = []
+    smmin = []
+    for hmr in hmrange:
+        sm = [gh.lgMs_B13(hmr,zr) for zr in zrange]
+        smmax.append(max(sm)+0.2)
+        smmin.append(min(sm)-0.2)
+
+    ax.fill_between(hmrange,smmax,smmin,alpha=0.5,facecolor='grey')
+    return
 
 
 def plot_m18(ax,h=0.6781,edges=False,omega_0=0.25,**kwargs):
@@ -951,6 +1028,58 @@ def plot_orbits(prog_no,prog_disk,models,task='survive_with_disk',candidate=None
 
     return
 
+def plot_history(mains,models):
+    """
+    Check the mainbranch histories that have step jumps for the step_forward method
+    """
+
+    z,_,_,hm = read_tree()
+    ztrees = np.tile(z,(1000,1)) 
+    colorsl = ['b','yellow']   
+    colorss = ['cyan','orange']
+
+    hm50 = np.percentile(hm,50,axis=0)
+    b13sm = np.array([gh.lgMs_B13(np.log10(hm_tree),z) for hm_tree in hm])
+    b13sm50 = np.percentile(b13sm,50,axis=0)
+    b13sm1sigma = np.percentile(b13sm,84.1,axis=0)
+    b13sm_err = b13sm1sigma-b13sm50
+
+    fig = pl.figure(figsize=(8,6))
+    
+    for main,model,colorl,colors in zip(mains,models,colorsl,colorss):
+        dm = main['main_branch_disk_mass']
+        lgdm50 = np.percentile(np.log10(dm),50,axis=0)
+        pl.plot(np.log10(1+ztrees).T,np.log10(dm).T,alpha=0.05,c=colorl,zorder=1)
+        pl.scatter(np.log10(1+ztrees)[0].T,lgdm50.T,c=colors,zorder=2)
+        #print(np.log10(mid_dm))
+
+    # Satgen built-in sm scatter is 0.2 in log
+    pl.errorbar(np.log10(1+z),b13sm50,yerr=b13sm_err,c='k',alpha=0.5) 
+    for zz in z:
+        pl.axvline(np.log10(1+zz),c='grey',alpha=0.2,lw=1,ls='--')
+    return
+
+def plot_history_smhm(mains,models):
+    """
+    """
+    _,_,_,hm = read_tree()
+    colorsl = ['b','yellow']
+    colorss = ['cyan','orange']
+
+    pl.figure(figsize=(8,6))
+
+    for main,model,colorl,colors in zip(mains,models,colorsl,colorss):
+        dm = main['main_branch_disk_mass']
+        pl.plot(np.log10(hm).T,np.log10(dm).T,alpha=0.05,c=colorl,zorder=2)
+
+    ax = pl.gca()
+    plot_b13_satgen(ax)
+
+    pl.xlabel('$\mathrm{\log_{10}\, halo \,mass\,(M_{\odot})}$',fontsize=15)
+    pl.ylabel('$\mathrm{\log_{10}\, stellar(disk) \,mass\,(M_{\odot})}$',fontsize=15)
+    pl.xlim(9,12.5)
+    pl.ylim(5,11.5)
+    return
 #########################################################
 ### debug
 def debug_prog_matching(data,models,r=10,f=100):
@@ -999,5 +1128,28 @@ def debug_prog_matching(data,models,r=10,f=100):
     print("Progenitors have far initial radius difference ({}kpc): ".format(r),rcounter)
     print("Progenitors have large initial mass difference ({} times): ".format(f),mcounter)
     return #i_rdiff_far,i_hmdiff_large
+
+def debug_smhm_range(nrepeat):
+    """
+    """
+
+    zrange  = np.arange(0,24,0.2)
+    hmrange = 10**np.arange(9,12.7,0.2)    
+
+    pl.figure(figsize=(8,6))
+
+    for hm in hmrange:
+        for _ in np.arange(nrepeat):
+            sm = np.array([init.Mstar(hm,z,choice='B13') for z in zrange])
+            pl.scatter(np.repeat(np.log10(hm),len(sm)),np.log10(sm),s=2)
+    ax = pl.gca()
+    plot_b13_satgen(ax)
+
+    pl.xlabel('$\mathrm{\log_{10}\, halo \,mass\,(M_{\odot})}$',fontsize=15)
+    pl.ylabel('$\mathrm{\log_{10}\, stellar(disk) \,mass\,(M_{\odot})}$',fontsize=15)
+    pl.xlim(9,12.5)
+    pl.ylim(5,11.5)
+
+    return
 
 #########################################################

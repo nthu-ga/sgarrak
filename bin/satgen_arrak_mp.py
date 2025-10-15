@@ -12,7 +12,7 @@ from astropy.table import Table
 
 import copy
 
-sys.path.append(os.path.abspath('../py'))
+sys.path.append(os.path.abspath('/data/chungwen/sgarrak/py'))
 import sgarrak.sgarrak as sga
 import argparse
 import h5py
@@ -49,11 +49,16 @@ def write_results(results, tree_data, params, output_times, filename,reorder=Non
 
     total_nprog = len(total_results['tree_idx'])
 
-    tree_array_2d_properties = [
-            'main_branch_halo_mass', 
-            'main_branch_halo_c',
-            'main_branch_disk_mass', 
-            'main_branch_disk_reff']
+    if 'main_branch_disk_mass' in tree_data[0].keys():
+        tree_array_2d_properties = [
+                'main_branch_halo_mass', 
+                'main_branch_halo_c',
+                'main_branch_disk_mass', 
+                'main_branch_disk_reff']
+    else:
+        tree_array_2d_properties = [
+                'main_branch_halo_mass',
+                'main_branch_halo_c']
 
     sort_order = reorder if reorder is not None else None
 
@@ -107,6 +112,7 @@ def write_results(results, tree_data, params, output_times, filename,reorder=Non
 def process_tree(itree ,fd=0.0 ,flattening=25.,
                  disk_method='fd',
                  walk_tree='backward',
+                 mstar_shift=None,
                  output_zred=None,
                  progenitors=None,
                  tree_main_branch_masses=None,
@@ -114,7 +120,9 @@ def process_tree(itree ,fd=0.0 ,flattening=25.,
                  cosmology=None,
                  nprogs_max=None,
                  n_substeps=None,
-                 verbose=False):
+                 verbose=False,
+                 cooling_threshold=True,
+                 z0_smhm=False):
     """
     """
     #sleep(3)
@@ -133,11 +141,11 @@ def process_tree(itree ,fd=0.0 ,flattening=25.,
     progs_this_tree   = np.flatnonzero(progenitors['TreeID'] == itree)
     nprogs_this_tree  = len(progs_this_tree)
     host_mass_history = tree_main_branch_masses[itree]
-    
     # Call the host object
     host = sga.Host(host_mass_history, tree_redshifts, cosmology,
                     fd=fd, flattening=flattening, output_zred=output_zred,
-                    disk_method=disk_method,walk_tree=walk_tree)
+                    disk_method=disk_method,walk_tree=walk_tree,
+                    cooling_threshold=cooling_threshold,z0_smhm=z0_smhm)
 
     # Define result keys once
     result_keys = [
@@ -208,6 +216,8 @@ def parse_args():
     parser.add_argument("--ntrees", help="Only process a fixed number of trees", default=None, type=int)
     parser.add_argument("--hubble","-H", help="H0 hubble constant", default=0.73,type=float)
     parser.add_argument("--serial", help="Execute in serial, no multithreading",action="store_true")
+    parser.add_argument("--z0_smhm", help="Whether uses z0 smhm relation for disk masses",default=False)
+    parser.add_argument("--cooling_threshold", help="Whether turns on a cooling threshold check for disk growth",default=True)
     return parser.parse_args()
 
 ###########################################################
@@ -269,6 +279,8 @@ if __name__ == '__main__':
                                    tree_redshifts=tree_redshifts,
                                    cosmology=cosmology,
                                    nprogs_max=args.nprogs,
+                                   cooling_threshold=args.cooling_threshold,
+                                   z0_smhm=args.z0_smhm,
                                    verbose=True)    
  
     print('Processing...')
