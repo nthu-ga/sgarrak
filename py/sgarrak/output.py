@@ -326,6 +326,55 @@ def volume_weight(root_mass):
     
     return weights
 
+def mod_Mstar(hm,h=0.73,z=0.,choice='B13',task='Mstar'):
+    """
+    Customized Mstar 
+    The halo mass from our eps tree already dealt with h
+    
+    B13 assumed parameters: Omega_M = 0.27
+                            Omega_lambda = 0.73
+                            h = 0.7
+                            ns = 0.95
+                            sigma8 = 0.82
+
+    B19 assumed parameters: h = 0.678
+
+    Parameters: h: Hubble parameter assumed in the merger tree
+                hm: linear halo mass
+
+    Return: linear stellar mass
+
+    """
+
+    if choice=='B13':
+        h_model = 0.7
+        hm *= (h/h_model)
+        if task=='Mstar':
+            sm = init.Mstar(hm,z,choice=choice)
+        elif task=='lgMs_B13':
+            sm = 10**gh.lgMs_B13(np.log10(hm),z)
+        else:
+            raise ValueError(f"Invalid task '{task}' for choice 'B13'")
+        
+    elif choice=='RP17':
+        h_model = 0.7 # Not used, needs to check
+        hm *= (h/h_model)
+        if task=='Mstar':
+            sm = init.Mstar(hm,z,choice=choice)
+        elif task=='lgMs_RP17':
+            sm = 10**gh.lgMs_RP17(np.log10(hm),z)
+        else:
+            raise ValueError(f"Invalid task '{task}' for choice 'RP17'")
+
+    elif choice=='B19':
+        h_model = 0.678
+        hm *= (h/h_model)
+        raise NotImplementedError('B19: Not provide now')
+        
+    sm *= (h_model/h)
+    return sm
+
+
 def avg_smhm(n,return_edge=False):
     """
     Averaged stellar masses given redshifts and halo masses.
@@ -338,17 +387,17 @@ def avg_smhm(n,return_edge=False):
     
     """
     zrange  = np.arange(0,14,0.2)
-    N = n
-    Nz = np.random.choice(zrange,N)
+    Nz = np.random.choice(zrange,n)
+    h = 0.73
 
-    hmrange = 10**np.arange(2,13,0.5)
+    hmrange = 10**np.arange(9,12.7,0.2)/h
 
     avgsm = []
     maxsm = []
     minsm = []
 
     for hm in hmrange:
-        smlist = [init.Mstar(hm,z, choice='B13') for z in Nz]
+        smlist = [mod_Mstar(hm,z=z, choice='B13',task='Mstar') for z in Nz]
         avgsm.append(np.median(smlist))
         maxsm.append(max(smlist))
         minsm.append(min(smlist))
@@ -557,34 +606,39 @@ def plot_b18(ax,h=0.678,centrals=True,mean_only=False,
                         label='Behroozi+ (2019)')    
     return
 
-def plot_b18_satgen(ax):
+def plot_avgb13_satgen(ax):
     """
-    b18 or b13?
+    Repeat b13 init.Mstar relation 10000 times to get the range. 
     """
-    maxsm,minsm,hmrange = avg_smhm(1000,return_edge=True)
+    maxsm,minsm,hmrange = avg_smhm(10000,return_edge=True)
 
     ax.fill_between(np.log10(hmrange),np.log10(maxsm),np.log10(minsm),
-                    alpha=0.5,label='B19')
+                    alpha=0.5,label='B13')
     
     return
 
-def plot_b13_satgen(ax):
+def plot_b13_satgen(ax,sigma=1,color='grey',z0_smhm=False):
     """
     Similar to the above function but directly uses 0.2 scatter in log sm.
 
     For each halo mass bins, it takes the highest and lowest value of hm(z) and 
     add/minus 0.2.
     """
+    h = 0.73
     zrange = np.arange(0,14,0.2)
-    hmrange = np.arange(9,12.7,0.2)
+    hmrange = 10**np.arange(9,12.7,0.2)/h
+    lghmrange = np.log10(hmrange)
     smmax = []
     smmin = []
     for hmr in hmrange:
-        sm = [gh.lgMs_B13(hmr,zr) for zr in zrange]
-        smmax.append(max(sm)+0.2)
-        smmin.append(min(sm)-0.2)
+        if z0_smhm:
+            sm = np.log10([mod_Mstar(hmr,z=0,task='lgMs_B13') for zr in zrange])
+        else:
+            sm = np.log10([mod_Mstar(hmr,z=zr,task='lgMs_B13') for zr in zrange])
+        smmax.append(max(sm)+0.2*sigma)
+        smmin.append(min(sm)-0.2*sigma)
 
-    ax.fill_between(hmrange,smmax,smmin,alpha=0.5,facecolor='grey')
+    ax.fill_between(lghmrange,smmax,smmin,alpha=0.5,facecolor=color)
     return
 
 
@@ -1036,9 +1090,12 @@ def plot_orbits(prog_no,prog_disk,models,task='survive_with_disk',candidate=None
 
     return
 
-def plot_history(mains,models):
+def plot_history(mains,models,halo_mass=False):
     """
     Check the mainbranch histories that have step jumps for the step_forward method
+    
+    Parameters: halo_mass: If true, plot the sm to z and it's hm to z.
+                           If false, plot the sm to z for the two different model.
     """
 
     z,_,_,hm = read_tree()
@@ -1054,12 +1111,23 @@ def plot_history(mains,models):
 
     fig = pl.figure(figsize=(8,6))
     
-    for main,model,colorl,colors in zip(mains,models,colorsl,colorss):
+    if halo_mass:
+        main = mains[0]
         dm = main['main_branch_disk_mass']
         lgdm50 = np.percentile(np.log10(dm),50,axis=0)
-        pl.plot(np.log10(1+ztrees).T,np.log10(dm).T,alpha=0.05,c=colorl,zorder=1)
-        pl.scatter(np.log10(1+ztrees)[0].T,lgdm50.T,c=colors,zorder=2)
-        #print(np.log10(mid_dm))
+        pl.plot(np.log10(1+ztrees).T,np.log10(dm).T,alpha=0.05,c=colorsl[0],zorder=1)
+        pl.scatter(np.log10(1+ztrees)[0].T,lgdm50.T,c=colorss[0],zorder=2)
+
+        lghm50 = np.percentile(np.log10(hm),50,axis=0)
+        pl.plot(np.log10(1+ztrees).T,np.log10(hm).T,alpha=0.05,c=colorsl[1],zorder=1)
+        pl.scatter(np.log10(1+ztrees)[0].T,lghm50.T,c=colorss[1],zorder=2)
+    else:
+        for main,model,colorl,colors in zip(mains,models,colorsl,colorss):
+            dm = main['main_branch_disk_mass']
+            lgdm50 = np.percentile(np.log10(dm),50,axis=0)
+            pl.plot(np.log10(1+ztrees).T,np.log10(dm).T,alpha=0.05,c=colorl,zorder=1)
+            pl.scatter(np.log10(1+ztrees)[0].T,lgdm50.T,c=colors,zorder=2)
+            #print(np.log10(mid_dm))
 
     # Satgen built-in sm scatter is 0.2 in log
     pl.errorbar(np.log10(1+z),b13sm50,yerr=b13sm_err,c='k',alpha=0.5) 
@@ -1148,7 +1216,7 @@ def debug_smhm_range(nrepeat):
 
     for hm in hmrange:
         for _ in np.arange(nrepeat):
-            sm = np.array([init.Mstar(hm,z,choice='B13') for z in zrange])
+            sm = np.array([mod_Mstar(hm,z=z,choice='B13',task='Mstar') for z in zrange])
             pl.scatter(np.repeat(np.log10(hm),len(sm)),np.log10(sm),s=2)
     ax = pl.gca()
     plot_b13_satgen(ax)
@@ -1160,4 +1228,50 @@ def debug_smhm_range(nrepeat):
 
     return
 
+def check_sm_growth_logic(n_repeat=10,sigma=1):
+    """
+    Given two slop, one is steep and one is shallow, check if shallow slop makes 
+    sm growth more easily to stay outside one sigma once fell outside one sigma.
+
+    Maybe a larger time step also has an effect? (maybe not) 
+    """
+
+    x = np.arange(0, 20, 0.5)
+    
+    pl.figure(figsize=(8, 6))
+    
+    for rep in range(n_repeat):
+        prevy = 0
+        y, ymax, ymin = [], [], []
+        ymax1, ymin1 = [], []
+
+        for xx in x:
+            if xx <= 10:
+                slope = 1
+                yy = np.random.normal(xx * slope, 0.5)
+                ymax.append(xx * slope + 0.5)
+                ymin.append(xx * slope - 0.5)
+                ymax1.append(xx * slope + 0.5*sigma)
+                ymin1.append(xx * slope - 0.5*sigma)
+            else:
+                slope = 0.2
+                yy = np.random.normal(xx * slope + 10*(1-slope), 0.5)
+                ymax.append(xx * slope + 10*(1-slope) +0.5)
+                ymin.append(xx * slope + 10*(1-slope) -0.5)
+                ymax1.append(xx * slope + 10*(1-slope) + 0.5*sigma)
+                ymin1.append(xx * slope + 10*(1-slope) - 0.5*sigma)
+            if yy > prevy:
+                y.append(yy)
+                prevy = yy
+            else:
+                y.append(prevy)
+    
+        # Plot this realization
+        pl.scatter(x, y, s=8, zorder=2, alpha=0.6, label=f"Run {rep+1}" if rep==0 else None)
+    
+    # Grey shaded region showing ±1σ band
+    ax = pl.gca()
+    ax.fill_between(x, ymax, ymin, alpha=0.4, facecolor='grey', zorder=1)
+    ax.fill_between(x, ymax1, ymin1, alpha=0.3, facecolor='cyan', zorder=1)
+    return
 #########################################################
