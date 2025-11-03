@@ -58,6 +58,12 @@ if not SATGEN_ETC_PATH in sys.path:
 
 # SatGen Imports
 import config as cfg
+
+# Might want to pass these explicitly to evolve
+cfg.Mres    = 100.0
+cfg.Rres    = 0.001
+cfg.psi_res = 1.0e-5
+
 import cosmo as co
 import evolve as ev
 from   profiles import NFW,Dekel,MN,Einasto,Green
@@ -229,6 +235,7 @@ class Host():
             else:
                 # Assign starting mass in the iteration
                 starting_disk_mass = 0
+                # FIXME this breaks the non-step methods
                 #starting_disk_mass = init.Mstar(self.mass[self.nlev-1], 
                 #                                self.zred[self.nlev-1], choice='B13')
 
@@ -311,10 +318,18 @@ class Host():
                     # For the forward method, we also required that the disk
                     # mass only grows if the halo mass is above the cooling
                     # threshold.
-                    disk_mass = init.Mstar(mass_i, z_i, choice='B13')
+        
+                    # HACK: always use the z=0 relation here for consistency
+                    # across redshfits
+                    #disk_mass = init.Mstar(mass_i, z_i, choice='B13')
+                    disk_mass = init.Mstar(mass_i, 0, choice='B13')
                     grow_disk = threshold_check(mass_i,z_i)
 
                     if walk_tree == 'backward':
+                        # Skip the first step
+                        if idx_iter == 0:
+                            continue
+
                         # We have drawn a disk mass for an earlier time
                         if disk_mass <= prev_disk_mass:
                             # Disk was less massive in the past;
