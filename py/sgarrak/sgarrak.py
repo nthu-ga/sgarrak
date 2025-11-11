@@ -8,8 +8,11 @@ import warnings
 warnings.filterwarnings("ignore", category=RuntimeWarning)
 import astropy.cosmology as cosmo
 from scipy.interpolate import interp1d
+from scipy.stats import truncnorm
 
 from astropy.table import Table
+from astropy import constants as const
+from astropy import units as u
 
 import copy
 
@@ -142,7 +145,172 @@ def mod_Mstar(hm,h=0.73,z=0.,choice='B13',task='Mstar'):
     sm *= (h_model/h)
     return sm 
 
+############################################################
+### EMERGE
+## EMERGE is an empirical model for star formation. see Moster et al. 2018
+## NOTE: EMERGE only use 'forward' method.
+#        (Although the logic of tdyn is current time - tdyn.)
+#        EMERGE uses h=0.6781
+def mstar(delta_t,z,
+          M_dot_dyn,Rv_dot_dyn,e,dens_profile,
+          h=0.73):
+    """
+    The main part of the equations. It calculates the stellar mass growth 
+    between each time step.
 
+    Syntax: stellar mass growth = (in-situ formation - dying stars)
+    
+    f_loss is from Chabrier 2003 IMF    
+
+    Parameters: delta_t: t-t'
+                M_dot_dyn: halo growth rate over a dynamical time
+                Rv_dot_dyn: virial radius growth rate over a dynamical time
+                e: instantanious baryon conversion efficiency
+                dens_profile: halo density profile
+
+    Return: Stellar mass increased in delta_t
+
+    NOTE: 
+    m_loss_dot does not include the instantaneous recycling.
+
+    macc is not needed for our purpose.
+
+    cww:
+    The model only fit to z=10?
+    """
+
+    mstar_dot = sfr(M_dot_dyn,Rv_dot_dyn,e,dens_profile,z)
+    f_loss = 0.05 * np.log(1+delta_t/(1.4/1e3)) # eq.12 in Gyr
+    delta_mstar = delta_t * (mstar_dot * (1 - f_loss)) # eq.11
+    return delta_mstar
+
+def sfr(M_dot_dyn,Rv_dot_dyn,e,dens_profile,z):
+    """
+    The halo mass growth due to accretions is the accreted masses - pseudo evolution of
+    the virial radius growth over time as the background density decrease.
+
+    Syntax: M_dot = <M_dot>_dyn - 4 * pi * Rv^2 * rho(Rv) * <Rv_dot>_dyn
+
+    The baryonic growth rate at two time steps is the baryons brought from mergers
+    
+    Syntax: mb_dot = fb * M_acc
+
+    The stellar mass forms between two time steps is the mb_dot times the instantaneous 
+    baryonic conversion efficiency.
+
+    Syntax: mstar_dot = mb_dot * e
+
+    Parameter: M_dot_dyn: halo growth rate over a dynamical time
+               Rv_dot_dyn: virial radius growth rate over a dynamical time
+               e: instantanious baryon conversion efficiency
+               dens_profile: halo density profile
+               z: redshift
+
+    NOTE: The cosmology in our model does not set Ob0. Maybe this needs to be changed.
+
+    cww:
+    This method acctually calculate the baryonic budget from mergers, which solves the 
+    ambiguity of gas brought by accreted subhalos when using a purely SMHM relation.
+    
+    """
+
+    # Cosmology we use
+    Omega_b = 0. 
+    Omega_m = 0.25
+    # Omega_b/Omega_m from Moster18
+    fb = 0.156 
+    #Omega_b = 0.0484
+    #Omega_m = 0.308
+
+    # virial radius
+    Rv = dens_profile.rh
+    # density at the virial radius.
+    rho_Rv = dens_profile.rho(Rv,z)
+
+    # halo growth rate due to accretion and pseudo virial radius growth
+    M_dot = M_dot_dyn - 4 * np.pi * Rv**2 * rho_Rv * Rv_dot_dyn # eq.4
+
+    # baryonic growth rate
+    mb_dot = fb * M_dot # eq.2
+
+    mstar_dot = mb_dot * e # eq.1
+    return mstar_dot
+
+def inst_b_conversion(M,z,h=0.73):
+    """
+    Instantaneous baryon conversion efficiency e
+    
+    Table 6 is the fitting result from MCMC.
+    """
+
+    # Table 6; best fit
+    M0 = 11.339
+    Mz = 0.692
+    e0 = 0.005
+    ez = 0.689
+    beta0   = 3.344
+    betaz   = -2.079
+    gamma0  = 0.966
+    h_model = 0.6781
+
+    # h correction
+    M0 *= h_model/h
+    Mz *= h_model/h
+    
+    a = 1/(z+1)
+    M1 = 10**(M0 + Mz*(1-a))      # eq.7
+    en = e0 + ez * (1-a)          # eq.8
+    beta  = beta0 + betaz * (1-a) # eq.9
+    gamma = gamma0                # eq.10
+
+    return 2 * en * ((M/M1)**-beta + (M/M1)**gamma)**-1 # eq.5
+
+def calculate_tdyn(age,mass,conc,zred,h=0.73,return_lgmass=False):
+    """
+
+    Syntax:
+    tdyn = (Rv^3/GM)^0.5
+
+    Parameters: age: age of main halos in Gyr
+                mass: linear mass of main halos
+                conc: concentration from NFW
+                zred: redshift
+                return_lgmass: This gives mass and Rv in log10 for
+                               analysis.
+
+    cww:
+    Maybe h affects the mass and the virial radius here?
+
+    """
+
+    G = const.G.to(u.kpc**3/u.M_sun/u.Gyr**2).value
+
+    halo_profile = NFW(mass,conc,Delta=200.,z=zred,sf=1.)
+    Rv = halo_profile.rh
+    tdyn_pf = halo_profile.tdyn(Rv)
+
+    # Interpolate in log mass
+    lgmass = np.log10(mass)
+    fm = interp1d(age,lgmass,fill_value='extrapolate')
+    fr = interp1d(age,Rv,fill_value='extrapolate')
+
+    m_dot_dyn  = []
+    Rv_dot_dyn = []
+    lgm_dot_dyn = []
+    tdyn_cal = []
+    for rv,m,ag in zip(Rv,mass,age):
+        tdyn = (rv**3/G/m)**0.5 # Gyr
+        tdyn_cal.append(tdyn)
+        if ag<tdyn:
+            raise ValueError(f"At the age '{ag}', the tdyn is larger")
+        m_dot_dyn.append((m-10**fm(ag-tdyn))/tdyn) #eq.3
+        Rv_dot_dyn.append((rv-fr(ag-tdyn))/tdyn)
+        lgm_dot_dyn.append(np.log10(m-10**fm(ag-tdyn))/tdyn)
+
+    if return_lgmass:
+        return lgm_dot_dyn,Rv_dot_dyn,tdyn_pf,tdyn_cal,Rv
+
+    return m_dot_dyn,Rv_dot_dyn,tdyn_pf,tdyn_cal,Rv
 ############################################################
 class Host():
     def __init__(self, mass, zred, cosmology, fd=0.0, flattening=0., disk_method='fd',
@@ -229,11 +397,22 @@ class Host():
             self.concentration = np.atleast_1d(init.concentration(self.mass[0], self.zred[0], choice='DM14'))
             
 
-        # Add a check for those disk_methods don't have forward method, so idx_iter does not accidentally
-        # reverse the index.
         if disk_method in ('interp_zavg', 'fd'):
+            # Add a check for those disk_methods don't have forward method, so idx_iter does not accidentally
+            # reverse the index.
             if walk_tree=='forward':
                 raise ValueError(f"This disk method '{disk_method}' does not support forward method.")
+        # Here are the extra infos requrired for the EMERGE method.
+        elif disk_method=='EMERGE':
+
+            # halo growth rate over the dynamical time
+            M_dot_dyn,Rv_dot_dyn,self.tdyn_pf,self.tdyn_cal,self.Rv = calculate_tdyn(self.t_age,self._tree_mass,self.concentration,self.zred,return_lgmass=False)
+
+            # Progenitor infos for mstar_acc...
+            # I think this step will break the self.interpolated part (zred & output_zred),
+            # unless it also gets interpolated. Or just remove this output_zred?
+            if walk_tree=='backward':
+                raise ValueError(f"This disk method '{disk_method}' only integrate stellar mass forward.")
 
         # Make a profile for each timestep
         self.dens_profile = list()
@@ -307,7 +486,7 @@ class Host():
                 #    # If init.Mstar finds a higher mass, do it again.
                 #    # This might cost many resources if the current level gives the lowest
                 #    # stellar mass (The chance of finding a lower stellar mass at eairlier 
-                #    # time is lower).
+                #    # time is lower).`
                 #    # Note this method makes job never finish if the rolling result is 
                 #    # close to the low edge (it is difficult for the next level to find 
                 #    # another lower stellar mass.).
@@ -368,6 +547,22 @@ class Host():
                             # force no change in mass for this step.
                             self.disk_mass.append(prev_disk_mass)
 
+                elif disk_method == 'EMERGE':
+                    if i==131:
+                        disk_mass = mod_Mstar(mass_i,h=0.73,z=z_i,choice='B13',task='Mstar')
+                        self.disk_mass.append(disk_mass)
+                    else:
+                        e = inst_b_conversion(mass_i,z_i)
+                        t = self.t_age[i]
+                        delta_t = t - self.t_age[i+1]
+                        delta_disk_mass = mstar(delta_t,z_i,
+                                          M_dot_dyn[i],Rv_dot_dyn[i],e,halo_profile,
+                                          h=0.73)
+                        disk_mass += delta_disk_mass
+                        self.disk_mass.append(disk_mass)
+
+
+
                 elif disk_method == 'fd':
                     # Use a fixed disk mass fraction
                     disk_mass = fd * mass_i
@@ -396,7 +591,7 @@ class Host():
                 self.halo_dens_profile.append(halo_profile)
 
         # Reverse the array for forward method, so no need to change other function.
-        if disk_method in ('step', 'interp', 'interp_sm'):
+        if disk_method in ('step', 'interp', 'interp_sm', 'EMERGE'):
             if walk_tree != 'backward':
                 self.disk_mass = self.disk_mass[::-1]
                 self.disk_reff = self.disk_reff[::-1]
