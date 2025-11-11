@@ -28,6 +28,13 @@ if not SATGEN_PATH in sys.path:
 SATGEN_ETC_PATH = '/data/chungwen/SatGen/etc'
 if not SATGEN_ETC_PATH in sys.path:
     sys.path.append(SATGEN_ETC_PATH)
+
+PY_PATH = '/data/chungwen/sgarrak/py/sgarrak'
+if not PY_PATH in sys.path:
+    sys.path.append(PY_PATH)
+
+import sgarrak as sga
+
     
 import numpy as np
 import os
@@ -1103,7 +1110,6 @@ def plot_history(mains,models,halo_mass=False):
     colorsl = ['b','yellow']   
     colorss = ['cyan','orange']
 
-    hm50 = np.percentile(hm,50,axis=0)
     b13sm = np.array([gh.lgMs_B13(np.log10(hm_tree),z) for hm_tree in hm])
     b13sm50 = np.percentile(b13sm,50,axis=0)
     b13sm1sigma = np.percentile(b13sm,84.1,axis=0)
@@ -1155,6 +1161,115 @@ def plot_history_smhm(mains,models):
     pl.ylabel('$\mathrm{\log_{10}\, stellar(disk) \,mass\,(M_{\odot})}$',fontsize=15)
     pl.xlim(9,12.5)
     pl.ylim(5,11.5)
+    return
+
+#########################################################
+### check
+## This place check assumptions or models.
+
+def plot_fitting(age,mass,conc,zred):
+    """
+    A check for polyfit and interp1d on the mass and virial radius
+    """
+
+    halo_profile = NFW(mass,conc,Delta=200.,z=zred,sf=1.)
+    Rv = halo_profile.rh
+
+    # Interpolate in log mass
+    lgmass = np.log10(mass)
+    fmi = interp1d(age,lgmass,fill_value='extrapolate')
+    fri = interp1d(age,Rv,fill_value='extrapolate')
+
+    pmp = np.polyfit(age,lgmass,deg=4)
+    fmp = np.poly1d(pmp)
+    prp = np.polyfit(age,Rv,deg=4)
+    frp = np.poly1d(prp)
+    
+    x_new = np.arange(13,0,-0.1)
+    pl.subplot(121)
+    pl.plot(x_new,fmi(x_new),label='interp')
+    pl.plot(x_new,fmp(x_new),label='polyfit')
+    pl.title('Halo mass')
+    pl.xlabel('age')
+    pl.ylabel('$\log_{10}\,\mathrm{M_{200}}$')
+    pl.legend(frameon=False)
+
+    pl.subplot(122)
+    pl.plot(x_new,fri(x_new))
+    pl.plot(x_new,frp(x_new))
+    pl.xlabel('age')
+    pl.ylabel('Rv')
+    pl.title('Virial radius')
+    return
+
+def plot_mdyn_Rvdyn(age,mass,conc,zred):
+    """
+    A check for the m_dot_dyn and Rv_dot_dyn
+    """
+
+    lgm_dot_dyn, Rv_dot_dyn,_,_,_ = sga.calculate_tdyn(age,mass,conc,zred,return_lgmass=True)
+    
+
+    pl.subplot(121)
+    pl.plot(age,lgm_dot_dyn)
+    pl.xlabel('age (Gyr)')
+    pl.ylabel(r'$\mathrm{\dot{M_{tdyn}} \, (\log_{10}\,M_{\odot}})$')
+
+    pl.subplot(122)
+    pl.plot(age,Rv_dot_dyn)    
+    pl.ylabel(r'$\dot{Rv_{tdyn}} \, (\mathrm{kpc})$')
+    return
+
+def plot_EMERGE(itree,hm,z,cosmology,choice='history'):
+
+    b13sm = np.array([gh.lgMs_B13(np.log10(hm_tree),z) for hm_tree in hm])
+    b13sm50 = np.percentile(b13sm,50,axis=0)
+    b13sm1sigma = np.percentile(b13sm,84.1,axis=0)
+    b13sm_err = b13sm1sigma-b13sm50
+
+    hosts = [
+        sga.Host(hm[i], z, cosmology,
+                 fd=0.1, flattening=25.,
+                 disk_method='EMERGE',
+                 walk_tree='forward',
+                 cooling_threshold=False,
+                 z0_smhm=False)
+        for i in itree
+    ]
+    
+    z      = np.array([h._tree_zred      for h in hosts])
+    dm     = np.log10([h.disk_mass       for h in hosts])
+    hm     = np.log10([h.mass            for h in hosts])
+    b13sm  = np.array([gh.lgMs_B13(np.log10(h.mass), h._tree_zred) for h in hosts])
+    z1     = np.array([h._tree_zred+1      for h in hosts])
+    
+    if choice=='history':
+        pl.plot(z,dm,alpha=0.2,c='b')
+        pl.plot(z,hm,alpha=0.2,c='k')
+        pl.xlabel('z')
+    elif choice=='smhm':
+        pl.plot(hm,dm)
+        ax = pl.gca()
+        plot_b13_satgen(ax)
+        pl.ylabel('$\mathrm{log_{10}\,halo\,mass}$')
+
+    pl.ylabel('$\mathrm{log_{10}\,disk\,mass}$')
+
+    return
+
+def plot_tdyn(host):
+    """
+    Compare tdyn from profile and calculation
+
+    tdyn_pf = dens_profile.tdyn(Rv)
+    tdyn_cal = (Rv^3 / G / M)^0.5
+    """
+
+    pl.plot(host.Rv,host.tdyn_pf,label='profile')
+    pl.plot(host.Rv,host.tdyn_cal,label='calculate')
+    pl.xlabel('Rv (kpc)')
+    pl.ylabel('tdyn (Gyr)')
+    pl.legend(frameon=False)
     return
 #########################################################
 ### debug
