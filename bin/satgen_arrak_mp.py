@@ -115,6 +115,7 @@ def write_results(results, tree_data, params, output_times, filename,reorder=Non
 def process_tree(itree ,fd=0.0 ,flattening=25.,
                  disk_method='fd',
                  walk_tree='backward',
+                 smhm='m18',
                  mstar_shift=None,
                  output_zred=None,
                  progenitors=None,
@@ -144,11 +145,13 @@ def process_tree(itree ,fd=0.0 ,flattening=25.,
     progs_this_tree   = np.flatnonzero(progenitors['TreeID'] == itree)
     nprogs_this_tree  = len(progs_this_tree)
     host_mass_history = tree_main_branch_masses[itree]
+    if nprogs_max is None:
+        nprogs_max = nprogs_this_tree
     # Call the host object
     host = sga.Host(host_mass_history, tree_redshifts, cosmology,
                     fd=fd, flattening=flattening, output_zred=output_zred,
                     disk_method=disk_method,walk_tree=walk_tree,
-                    cooling_threshold=cooling_threshold,z0_smhm=z0_smhm)
+                    cooling_threshold=cooling_threshold,z0_smhm=z0_smhm,smhm=smhm)
 
     # Define result keys once
     result_keys = [
@@ -162,8 +165,6 @@ def process_tree(itree ,fd=0.0 ,flattening=25.,
     # Initialize results dict with empty lists
     results = {key: [] for key in result_keys}
     
-    if nprogs_max is None:
-        nprogs_max = nprogs_this_tree
     
     for iprog in range(0,nprogs_max): 
         start_time = time.perf_counter()
@@ -171,7 +172,7 @@ def process_tree(itree ,fd=0.0 ,flattening=25.,
         prog_mass = progenitors['ProgenitorMass'][progs_this_tree][iprog]
         prog_ilev = progenitors['ProgenitorIlev'][progs_this_tree][iprog]
         # Call the progenitor object
-        prog = sga.Progenitor(prog_mass, host, level=prog_ilev, mstar_shift=mstar_shift)
+        prog = sga.Progenitor(prog_mass, host, level=prog_ilev, mstar_shift=mstar_shift,smhm=smhm)
         
         # Define a time step to evolve
         total_time_gyr = prog.infall_t_lbk
@@ -214,13 +215,14 @@ def parse_args():
     parser.add_argument("--disk_method",help="fd, no, interp_sm, interp, step, interp_zavg",default="fd", type=str)
     parser.add_argument("--walk_tree",help="backward or forward",default="backward", type=str)
     parser.add_argument("--mstar_shift","-msh",help="+-50 percent or so",default=None,type=float)
-    parser.add_argument("--output","-o", help="Output filename", default='test_all_progenitors.hdf5')
+    parser.add_argument("--output","-o", help="Output filename", default="test_all_progenitors.hdf5")
     parser.add_argument("--nprogs", help="Only process a fixed number of progenitors per tree", default=None, type=int)
     parser.add_argument("--ntrees", help="Only process a fixed number of trees", default=None, type=int)
-    parser.add_argument("--hubble","-H", help="H0 hubble constant", default=0.73,type=float)
+    parser.add_argument("--hubble","-H", help="H0 hubble constant", default=0.7,type=float)
     parser.add_argument("--serial", help="Execute in serial, no multithreading",action="store_true")
     parser.add_argument("--z0_smhm", help="Whether uses z0 smhm relation for disk masses",default=False)
     parser.add_argument("--cooling_threshold", help="Whether turns on a cooling threshold check for disk growth",default=True)
+    parser.add_argument("--smhm", help="stellar mass halo mass relation",default="m18")
     return parser.parse_args()
 
 ###########################################################
@@ -276,6 +278,7 @@ if __name__ == '__main__':
                                    disk_method = args.disk_method,
                                    walk_tree = args.walk_tree,
                                    mstar_shift = args.mstar_shift,
+                                   smhm = args.smhm,
                                    n_substeps = args.substeps,
                                    progenitors=progenitors,
                                    tree_main_branch_masses=tree_main_branch_masses,

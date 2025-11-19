@@ -631,9 +631,9 @@ def plot_b13_satgen(ax,sigma=1,color='grey',z0_smhm=False):
     For each halo mass bins, it takes the highest and lowest value of hm(z) and 
     add/minus 0.2.
     """
-    h = 0.73
+    h = 0.7
     zrange = np.arange(0,14,0.2)
-    hmrange = 10**np.arange(9,12.7,0.2)/h
+    hmrange = 10**np.arange(8,12.7,0.2)/h
     lghmrange = np.log10(hmrange)
     smmax = []
     smmin = []
@@ -645,7 +645,7 @@ def plot_b13_satgen(ax,sigma=1,color='grey',z0_smhm=False):
         smmax.append(max(sm)+0.2*sigma)
         smmin.append(min(sm)-0.2*sigma)
 
-    ax.fill_between(lghmrange,smmax,smmin,alpha=0.5,facecolor=color)
+    ax.fill_between(lghmrange,smmax,smmin,alpha=0.5,facecolor=color,label='B13')
     return
 
 
@@ -1152,7 +1152,7 @@ def plot_history_smhm(mains,models):
 
     for main,model,colorl,colors in zip(mains,models,colorsl,colorss):
         dm = main['main_branch_disk_mass']
-        pl.plot(np.log10(hm).T,np.log10(dm).T,alpha=0.05,c=colorl,zorder=2)
+        pl.plot(np.log10(hm).T,np.log10(dm).T,alpha=0.05,c=colorl,zorder=2,label=model)
 
     ax = pl.gca()
     plot_b13_satgen(ax)
@@ -1161,6 +1161,7 @@ def plot_history_smhm(mains,models):
     pl.ylabel('$\mathrm{\log_{10}\, stellar(disk) \,mass\,(M_{\odot})}$',fontsize=15)
     pl.xlim(9,12.5)
     pl.ylim(5,11.5)
+    pl.legend(frameon=False)
     return
 
 #########################################################
@@ -1243,12 +1244,14 @@ def plot_EMERGE(itree,hm,z,cosmology,choice='history'):
     b13sm  = np.array([gh.lgMs_B13(np.log10(h.mass), h._tree_zred) for h in hosts])
     z1     = np.array([h._tree_zred+1      for h in hosts])
     
+    print('init redshift check: ',z[:,-1])
+    print('init disk mass check: ',dm[:,-1])     
     if choice=='history':
-        pl.plot(z,dm,alpha=0.2,c='b')
-        pl.plot(z,hm,alpha=0.2,c='k')
+        pl.plot(z.T,dm.T,alpha=0.2,c='b')
+        pl.plot(z.T,hm.T,alpha=0.2,c='k')
         pl.xlabel('z')
     elif choice=='smhm':
-        pl.plot(hm,dm)
+        pl.plot(hm.T,dm.T)
         ax = pl.gca()
         plot_b13_satgen(ax)
         pl.ylabel('$\mathrm{log_{10}\,halo\,mass}$')
@@ -1270,6 +1273,26 @@ def plot_tdyn(host):
     pl.xlabel('Rv (kpc)')
     pl.ylabel('tdyn (Gyr)')
     pl.legend(frameon=False)
+    return
+
+def plot_m18smhm(progs):
+    """
+    This is testing M18 integrated baryon conversion efficiency
+    making a smhm relation
+    """
+    hm = []
+    sm = []
+    for prog in progs:
+        hm.append(prog.mass)
+        sm.append(prog.mstar)
+
+    ax = pl.gca()
+    plot_m18(ax)
+
+    pl.scatter(np.log10(hm),np.log10(sm),s=1,label='M18')
+    pl.xlabel('$\mathrm{log_{10}\,halo\,mass}$')
+    pl.ylabel('$\mathrm{log_{10}\,stellar\,mass}$')
+    pl.legend(frameon=False,loc='lower right')
     return
 #########################################################
 ### debug

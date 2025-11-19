@@ -97,7 +97,7 @@ def is_iterable(x):
     return False
 
 ############################################################
-def mod_Mstar(hm,h=0.73,z=0.,choice='B13',task='Mstar'):
+def mod_Mstar(hm,h=0.7,z=0.,choice='m13',task='Mstar',**kwargs):
     """
     Customized Mstar 
     The halo mass from our eps tree already dealt with h
@@ -109,6 +109,9 @@ def mod_Mstar(hm,h=0.73,z=0.,choice='B13',task='Mstar'):
                             sigma8 = 0.82
 
     B19 assumed parameters: h = 0.678
+
+    M18 adjusts h in the parameters. delta_t is now total age.
+    It only gives Mstar for the smhm relation.
 
     Parameters: h: Hubble parameter assumed in the merger tree
                 hm: linear halo mass
@@ -142,6 +145,12 @@ def mod_Mstar(hm,h=0.73,z=0.,choice='B13',task='Mstar'):
         hm *= (h/h_model)
         raise NotImplementedError('B19: Not provide now')
 
+    elif choice=='m18':
+        h_model = 0.678
+        fb = 0.156
+        e,sigma = integrate_b_conversion(z,hm,h=h_model)
+        sm = 10**(np.random.normal(np.log10(fb*hm*e),sigma)) #fb*hm*e
+
     sm *= (h_model/h)
     return sm 
 
@@ -153,7 +162,7 @@ def mod_Mstar(hm,h=0.73,z=0.,choice='B13',task='Mstar'):
 #        EMERGE uses h=0.6781
 def mstar(delta_t,z,
           M_dot_dyn,Rv_dot_dyn,e,dens_profile,
-          h=0.73):
+          h=0.7):
     """
     The main part of the equations. It calculates the stellar mass growth 
     between each time step.
@@ -236,7 +245,7 @@ def sfr(M_dot_dyn,Rv_dot_dyn,e,dens_profile,z):
     mstar_dot = mb_dot * e # eq.1
     return mstar_dot
 
-def inst_b_conversion(M,z,h=0.73):
+def inst_b_conversion(M,z,h=0.7):
     """
     Instantaneous baryon conversion efficiency e
     
@@ -244,8 +253,8 @@ def inst_b_conversion(M,z,h=0.73):
     """
 
     # Table 6; best fit
-    M0 = 11.339
-    Mz = 0.692
+    M0 = 10**11.339
+    Mz = 10**0.692
     e0 = 0.005
     ez = 0.689
     beta0   = 3.344
@@ -258,14 +267,14 @@ def inst_b_conversion(M,z,h=0.73):
     Mz *= h_model/h
     
     a = 1/(z+1)
-    M1 = 10**(M0 + Mz*(1-a))      # eq.7
+    M1 = M0 + Mz*(1-a)            # eq.7
     en = e0 + ez * (1-a)          # eq.8
     beta  = beta0 + betaz * (1-a) # eq.9
     gamma = gamma0                # eq.10
 
     return 2 * en * ((M/M1)**-beta + (M/M1)**gamma)**-1 # eq.5
 
-def calculate_tdyn(age,mass,conc,zred,h=0.73,return_lgmass=False):
+def calculate_tdyn(age,mass,conc,zred,h=0.7,return_lgmass=False):
     """
 
     Syntax:
@@ -311,10 +320,47 @@ def calculate_tdyn(age,mass,conc,zred,h=0.73,return_lgmass=False):
         return lgm_dot_dyn,Rv_dot_dyn,tdyn_pf,tdyn_cal,Rv
 
     return m_dot_dyn,Rv_dot_dyn,tdyn_pf,tdyn_cal,Rv
+
+## EMERGE SMHM relation
+def integrate_b_conversion(zred,mass,h=0.7):
+    """
+    Integrated beryon conversion efficiency in Moster18
+    """
+
+    # coefficients, table 8 all centrals
+    coef = dict()
+    z               = np.array([0.1,0.5,1.0,2.0,4.0,8.0])
+    coef['M1']      = np.array([11.80,11.85,11.95,12.,12.05,12.10])
+    coef['en']      = np.array([0.14,0.16,0.18,0.18,0.19,0.24])
+    coef['beta']    = np.array([1.75,1.70,1.60,1.55,1.50,1.30])
+    coef['gamma']   = np.array([0.57,0.58,0.60,0.62,0.64,0.64])
+    coef['M_sigma'] = np.array([10.80,10.70,10.60,10.50,10.40,10.30])
+    coef['sigma0']  = np.array([0.16,0.14,0.12,0.10,0.08,0.02])
+    coef['alpha']   = np.array([1.0,0.90,0.75,0.50,0.40,0.10])
+
+    m18_h = 0.6781
+
+    # h correction
+    coef['M1'] += np.log10(m18_h/h)
+    coef['M_sigma'] += np.log10(m18_h/h)
+
+    # interpolate, masses are in log.
+    for k,d in coef.items():
+        f = interp1d(z,d,fill_value='extrapolate')
+        coef[k] = f(zred)
+
+    # uncertainty, eq.25
+    sigma = coef['sigma0'] + np.log10((mass/10**coef['M_sigma'])**(-coef['alpha']) + 1)
+
+    # eq.5
+    e = 2 * coef['en'] / ((mass/10**coef['M1'])**(-coef['beta']) + (mass/10**coef['M1'])**coef['gamma'])
+    return e,sigma 
+
 ############################################################
 class Host():
     def __init__(self, mass, zred, cosmology, fd=0.0, flattening=0., disk_method='fd',
-                 output_zred=None, walk_tree='backward', cooling_threshold=True, z0_smhm=False):
+                 output_zred=None, walk_tree='backward', smhm='m18',
+                 cooling_threshold=True, z0_smhm=False):
         """
         
         Parameters: fd: disk mass fraction
@@ -402,17 +448,16 @@ class Host():
             # reverse the index.
             if walk_tree=='forward':
                 raise ValueError(f"This disk method '{disk_method}' does not support forward method.")
-        # Here are the extra infos requrired for the EMERGE method.
         elif disk_method=='EMERGE':
-
-            # halo growth rate over the dynamical time
-            M_dot_dyn,Rv_dot_dyn,self.tdyn_pf,self.tdyn_cal,self.Rv = calculate_tdyn(self.t_age,self._tree_mass,self.concentration,self.zred,return_lgmass=False)
-
             # Progenitor infos for mstar_acc...
             # I think this step will break the self.interpolated part (zred & output_zred),
             # unless it also gets interpolated. Or just remove this output_zred?
             if walk_tree=='backward':
                 raise ValueError(f"This disk method '{disk_method}' only integrate stellar mass forward.")
+
+        # halo growth rate over the dynamical time
+        M_dot_dyn,Rv_dot_dyn,self.tdyn_pf,self.tdyn_cal,self.Rv = calculate_tdyn(self.t_age,self._tree_mass,self.concentration,self.zred,return_lgmass=False)
+
 
         # Make a profile for each timestep
         self.dens_profile = list()
@@ -421,11 +466,11 @@ class Host():
 
         if self.has_disk:
 
-            mean_sm_z0   = mod_Mstar(self.mass[0],h=0.73,z=0.,choice='B13',task='lgMs_B13')
-            mean_sm_nlev = mod_Mstar(self.mass[self.nlev-1],h=0.73,z=self.zred[self.nlev-1],choice='B13',task='lgMs_B13')
+            mean_sm_z0   = mod_Mstar(self.mass[0],h=0.73,z=0.,choice=smhm,task='lgMs_B13')
+            mean_sm_nlev = mod_Mstar(self.mass[self.nlev-1],h=0.73,z=self.zred[self.nlev-1],choice=smhm,task='lgMs_B13')
  
             if walk_tree == 'backward':
-                starting_disk_mass = mod_Mstar(self.mass[0],h=0.73,z=self.zred[0], choice='B13',task='Mstar')
+                starting_disk_mass = mod_Mstar(self.mass[0],h=0.73,z=self.zred[0], choice=smhm,task='Mstar')
             elif walk_tree=='forward':
                 # Assign starting mass in the iteration
                 starting_disk_mass = 0
@@ -549,7 +594,8 @@ class Host():
 
                 elif disk_method == 'EMERGE':
                     if i==131:
-                        disk_mass = mod_Mstar(mass_i,h=0.73,z=z_i,choice='B13',task='Mstar')
+                        
+                        disk_mass = mod_Mstar(mass_i,h=0.73,z=z_i,choice=smhm)
                         self.disk_mass.append(disk_mass)
                     else:
                         e = inst_b_conversion(mass_i,z_i)
@@ -635,7 +681,7 @@ class Progenitor():
     def __init__(self, mass, host,
                  cosmology=None, zred=None, level=None, mstar=None,
                  orbit_init_method='li2020', xc=None, eps=None,
-                 mstar_shift=None):
+                 mstar_shift=None,smhm='m18'):
         """
         zred_or_level:
         """
@@ -703,11 +749,11 @@ class Progenitor():
         # Draw stellar mass from mstar-mhalo releation
         if mstar is None:
             if mstar_shift is None:
-                self.mstar_init = mod_Mstar(self.mass_init,h=0.73,z=self.zred,choice='B13',task='Mstar')
+                self.mstar_init = mod_Mstar(self.mass_init,h=0.7,z=self.zred,choice=smhm)
             else:
                 # Add a shift on the SMHM relation for progenitors to simulate different 
                 # formation models (?).
-                self.mstar_init = mod_Mstar(self.mass_init,h=0.73,z=self.zred,choice='B13',task='Mstar')*mstar_shift
+                self.mstar_init = mod_Mstar(self.mass_init,h=0.7,z=self.zred,choice=smhm)
         else:
             self.mstar_init = mstar
         self.mstar = self.mstar_init
