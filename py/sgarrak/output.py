@@ -151,6 +151,7 @@ def read_satgen(ver=3):
 
     dir_path = '/data/chungwen/sgarrak/runs/1000_mixed_logmass/'
     data = dict()
+    main = dict()
     if ver==0:
         data_path = dir_path+'lessoutput/'
         
@@ -162,7 +163,7 @@ def read_satgen(ver=3):
             data[odn] = read_hdf5(data_path+'prog_evo_1000_mixed_logmass_{}_lessoutput.hdf5'.format(odn),
                                   satgen_dataset_names,group='/Progenitors')
     
-    elif ver==1:
+    elif ver==0:
         data_path = dir_path+'reionoutput/'
 
         output_dataset_names = ['fd01','no','step_forward','step_backward']#,'interp_sm','interp']
@@ -175,7 +176,7 @@ def read_satgen(ver=3):
             data[odn] = read_hdf5(data_path+'prog_evo_1000_mixed_logmass_{}_disk.hdf5'.format(odn),
                                   satgen_dataset_names,group='/Progenitors')
 
-    elif ver==2:
+    elif ver==1:
         data_path = dir_path+'reionoutput/evolve/'
 
         output_dataset_names = ['fd01','no','step_forward','step_forward_shift15','step_forward_shift05']#,'interp_sm','interp']
@@ -188,7 +189,7 @@ def read_satgen(ver=3):
             data[odn] = read_hdf5(data_path+'prog_evo_1000_mixed_logmass_{}_disk.hdf5'.format(odn),
                                   satgen_dataset_names,group='/Progenitors')
 
-    elif ver==3:
+    elif ver==2:
         data_path = dir_path+'reionoutput/evolve_ver2/'
 
         output_dataset_names = ['no','fd01','step_backward','step_forward','step_forward_threshold_off','step_forward_threshold_off_z0smhm_on']
@@ -196,7 +197,6 @@ def read_satgen(ver=3):
                                 'prog_masses','prog_mstars','radii','status','t_proc','tage',
                                 'tree_idx','tsteps']
         main_dataset_names = ['main_branch_disk_mass']
-        main = dict()
         for odn in output_dataset_names:
             print('Building data: ',odn)
             data[odn] = read_hdf5(data_path+'prog_evo_1000_mixed_logmass_{}_disk.hdf5'.format(odn),
@@ -204,6 +204,20 @@ def read_satgen(ver=3):
             if odn != 'no':
                 main[odn] = read_hdf5(data_path+'prog_evo_1000_mixed_logmass_{}_disk.hdf5'.format(odn),
                                       main_dataset_names,group='/MainBranches')
+
+    elif ver==3:
+        data_path = dir_path+'reionoutput/evolve_ver3/'
+
+        output_dataset_names = ['emerge']
+        prog_dataset_names = ['coors','has_galaxy','itree','levels_at_tsteps','nprog',
+                                'prog_masses','prog_mstars','radii','status','t_proc','tage',
+                                'tree_idx','tsteps']
+        main_dataset_names = ['main_branch_halo_mass','main_branch_halo_c','main_branch_disk_mass','main_branch_disk_reff']
+
+        for odn in output_dataset_names:
+            data[odn] = read_hdf5(data_path+'prog_evo_1000_mixed_logmass_EMERGE_disk.hdf5',prog_dataset_names,group='/Progenitors')
+            if odn != 'no':
+                main[odn] = read_hdf5(data_path+'prog_evo_1000_mixed_logmass_EMERGE_disk.hdf5',main_dataset_names,group='/MainBranches')
 
     elif ver==-1:
         data_path = dir_path
@@ -213,11 +227,11 @@ def read_satgen(ver=3):
 
         data = read_hdf5(data_path+'test.hdf5',prog_dataset_names,group='/Progenitors')
         main = read_hdf5(data_path+'test.hdf5',main_dataset_names,group='/MainBranches')
+
         
-    if ver==3 or ver==-1:
+    if ver in (2,3,-1):
         return data,main
-    else:
-        return data   
+    return data   
 #########################################################
 ### Physics
 def moster_18_eff_func(m,M1=1,epsilon=0,beta=1,gamma=1):
@@ -870,7 +884,7 @@ def plot_macc_function(progs,root_mass,reionization=False):
 
     return
 
-def plot_macc_mstream_funtion(progs,root_mass,task='m_acc'):
+def plot_macc_mstream_function(progs,root_mass,task='m_acc'):
     """
     Volume weighted stellar stream mass function
 

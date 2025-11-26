@@ -360,7 +360,7 @@ def integrate_b_conversion(zred,mass,h=0.7):
 class Host():
     def __init__(self, mass, zred, cosmology, fd=0.0, flattening=0., disk_method='fd',
                  output_zred=None, walk_tree='backward', smhm='m18',
-                 cooling_threshold=True, z0_smhm=False):
+                 cooling_threshold=False, z0_smhm=False):
         """
         
         Parameters: fd: disk mass fraction
@@ -443,7 +443,7 @@ class Host():
             self.concentration = np.atleast_1d(init.concentration(self.mass[0], self.zred[0], choice='DM14'))
             
 
-        if disk_method in ('interp_zavg', 'fd'):
+        if disk_method in ('interp_zavg'):
             # Add a check for those disk_methods don't have forward method, so idx_iter does not accidentally
             # reverse the index.
             if walk_tree=='forward':
@@ -513,7 +513,6 @@ class Host():
                     else:
                         disk_mass = starting_disk_mass * (mass_i/self.mass[self.nlev-1])
                     self.disk_mass.append(disk_mass)
-                    self.disk_reff.append(Reff)
 
                 elif disk_method == 'interp_sm':
                     # Use the mean z=0 SMHM relation to get the stellar mass difference.
@@ -524,7 +523,6 @@ class Host():
                     else:
                         disk_mass = starting_disk_mass * (mean_sm_ilev/mean_sm_nlev)
                     self.disk_mass.append(disk_mass)
-                    self.disk_reff.append(Reff)
 
                 #elif disk_method == 'roll_dice':
                 #    # Take the stellar mass as long as it goes up in the past
@@ -547,7 +545,6 @@ class Host():
                     # (i.e. the disk does not grow)
 
                     # The disk size does not depend on the disk mass
-                    self.disk_reff.append(Reff)
                     
                     # For the forward method, we can require that the disk
                     # mass only grows if a halo mass is above the cooling
@@ -613,10 +610,11 @@ class Host():
                     # Use a fixed disk mass fraction
                     disk_mass = fd * mass_i
                     self.disk_mass.append(disk_mass)
-                    self.disk_reff.append(Reff)
                 else:
-                    raise ValueError(f"Disk method {disk_mathod:s} not supported")
+                    raise ValueError(f"Disk method {disk_method:s} not supported")
                 
+                self.disk_reff.append(Reff)
+
                 disk_profile = MN(disk_mass,scale_radius,scale_height)
 
                 # Pre-generate the interpolator for M(<r) by computing M(<10kpc)
@@ -680,8 +678,8 @@ def threshold_check(hm,z):
 class Progenitor():
     def __init__(self, mass, host,
                  cosmology=None, zred=None, level=None, mstar=None,
-                 orbit_init_method='li2020', xc=None, eps=None,
-                 mstar_shift=None,smhm='m18'):
+                 orbit_init_method='li2020', xc=None, eps=None, xv=None,
+                 conc=None, mstar_shift=None,smhm='m18'):
         """
         zred_or_level:
         """
@@ -740,7 +738,10 @@ class Progenitor():
             self.init_disk_mass = self.host.disk_mass[self.level]
 
         # Draw progenitor concentration
-        self.concentration = init.concentration(self.mass,self.zred,choice='DM14')
+        if conc is None:
+            self.concentration = init.concentration(self.mass,self.zred,choice='DM14')
+        else:
+            self.concentration = conc
 
         # The halo potential is a "Green" profile; an NFW with additional
         # methods to adjust for the effects of tidal stripping.
@@ -779,6 +780,8 @@ class Progenitor():
             self.xv = init.orbit_from_Li2020(self.init_host_halo_dens_profile,
                                              self.vel_ratio,
                                              self.gamma)
+        elif orbit_init_method == 'xv':
+            self.xv = xv
         else:
             raise Exception
 
@@ -829,7 +832,8 @@ def reshape_coors(coorlist,Narray):
 ############################################################
 def evolve_orbit(host, prog ,tsteps=None, 
                  evolve_prog_mass=False, 
-                 evolve_past_res_limits=False):
+                 evolve_past_res_limits=False,
+                 alpha_shift=None,dynamical_friction_shift=None):
     """
     tstep: timesteps measured forwards from the initial conditions at 
         infall. 
@@ -950,8 +954,10 @@ def evolve_orbit(host, prog ,tsteps=None,
 
         # Evolve the progenitor orbit based on the current mass
         # and host halo profile.
-        
-        o.integrate(t, host_dp, prog_mass)
+        if dynamical_friction_shift is None:
+            o.integrate(t, host_dp, prog_mass)
+        else:
+            o.integrate(t, host_dp, prog_mass*dynamical_friction_shift)
         
         # Note that the coordinates are updated 
         # internally in the orbit instance "o" when calling
@@ -970,7 +976,8 @@ def evolve_orbit(host, prog ,tsteps=None,
             # SatGen requires the *initial* progenitor concentration and the
             # *instantaneous* host concentration
             alpha_strip = ev.alpha_from_c2(host_concentration,init_pc)
-
+            if alpha_shift is not None:
+                alpha_strip *= alpha_shift
             # prog_dp and host_dp are the instantaneous values, updated
             # for each step.
             prog_evolved_mass, prog_tidal_raidus = ev.msub(prog_dp,
@@ -979,7 +986,6 @@ def evolve_orbit(host, prog ,tsteps=None,
                                                            dt,
                                                            choice='King62',
                                                            alpha=alpha_strip)
-            
             # Now update the potential of the satellite to the end of the step, after
             # mass loss. This update function claims to handle the resolution limit.
             prog_dp.update_mass(prog_evolved_mass)

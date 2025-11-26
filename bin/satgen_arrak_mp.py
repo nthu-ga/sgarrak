@@ -126,7 +126,8 @@ def process_tree(itree ,fd=0.0 ,flattening=25.,
                  n_substeps=None,
                  verbose=False,
                  cooling_threshold=True,
-                 z0_smhm=False):
+                 z0_smhm=False,
+                 orbit_init_method='li2020'):
     """
     """
     #sleep(3)
@@ -152,7 +153,6 @@ def process_tree(itree ,fd=0.0 ,flattening=25.,
                     fd=fd, flattening=flattening, output_zred=output_zred,
                     disk_method=disk_method,walk_tree=walk_tree,
                     cooling_threshold=cooling_threshold,z0_smhm=z0_smhm,smhm=smhm)
-
     # Define result keys once
     result_keys = [
         'prog_masses', 'prog_mstars', 'status', 'radii', 'tsteps', 'tage',
@@ -172,7 +172,8 @@ def process_tree(itree ,fd=0.0 ,flattening=25.,
         prog_mass = progenitors['ProgenitorMass'][progs_this_tree][iprog]
         prog_ilev = progenitors['ProgenitorIlev'][progs_this_tree][iprog]
         # Call the progenitor object
-        prog = sga.Progenitor(prog_mass, host, level=prog_ilev, mstar_shift=mstar_shift,smhm=smhm)
+        prog = sga.Progenitor(prog_mass, host, level=prog_ilev, mstar_shift=mstar_shift,smhm=smhm,
+                              orbit_init_method=orbit_init_method)
         
         # Define a time step to evolve
         total_time_gyr = prog.infall_t_lbk
@@ -223,6 +224,7 @@ def parse_args():
     parser.add_argument("--z0_smhm", help="Whether uses z0 smhm relation for disk masses",default=False)
     parser.add_argument("--cooling_threshold", help="Whether turns on a cooling threshold check for disk growth",default=True)
     parser.add_argument("--smhm", help="stellar mass halo mass relation",default="m18")
+    parser.add_argument("--orbit_init_method", help="orbit initial method for progenitors",default='li2020')
     return parser.parse_args()
 
 ###########################################################
@@ -279,6 +281,7 @@ if __name__ == '__main__':
                                    walk_tree = args.walk_tree,
                                    mstar_shift = args.mstar_shift,
                                    smhm = args.smhm,
+                                   orbit_init_method = arg.orbit_init_method,
                                    n_substeps = args.substeps,
                                    progenitors=progenitors,
                                    tree_main_branch_masses=tree_main_branch_masses,
@@ -326,7 +329,6 @@ if __name__ == '__main__':
                 results.append(results_this_tree)
                 tree_data.append(tree_data_this_tree)
                 tree_order.append(itree)
-
     t_end = time.perf_counter()
     print('Total processing time {:f}s'.format(t_end-t_start))
     print('             Per tree {:f}s'.format((t_end-t_start)/ntrees_max))
