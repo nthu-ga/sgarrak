@@ -20,6 +20,7 @@
 #########################################################
 ### envs
 import sys
+from importlib import reload
 
 SATGEN_PATH = '/data/chungwen/SatGen'
 if not SATGEN_PATH in sys.path:
@@ -34,7 +35,7 @@ if not PY_PATH in sys.path:
     sys.path.append(PY_PATH)
 
 import sgarrak as sga
-
+reload(sga)
     
 import numpy as np
 import os
@@ -97,7 +98,7 @@ def read_b18():
 
     return b18smhm, b18smhm_scatter
 
-def read_tree():
+def read_tree(tree_setup='default'):
     """
     pchtrees output files
     """
@@ -107,8 +108,14 @@ def read_tree():
     OMEGA_B = 0.04455
 
     cosmology = cosmo.FlatLambdaCDM(hubble_parameter*100,0.25)
-    tree_file = '/data/chungwen/sgarrak/pchtrees/runs/1000_mixed_logmass/output_satgen_1000_mixed_logmass.hdf5'
-
+    if tree_setup=='default':
+        tree_file = '/data/chungwen/sgarrak/pchtrees/runs/1000_mixed_logmass/output_satgen_1000_mixed_logmass.hdf5'
+    elif tree_setup=='extend':
+        tree_file = '/data/chungwen/sgarrak/pchtrees/runs/1000_mixed_logmass/debug_extend_mass_range_run/output_satgen_1000_mixed_logmass.hdf5'
+    elif tree_setup=='lower':
+        tree_file = '/data/chungwen/sgarrak/pchtrees/runs/1000_mixed_logmass/debug_lower_mass_range_run/output_satgen_1000_mixed_logmass.hdf5'
+    else:
+        ValueError(f"Invalid tree file '{tree_setup}'")
     tree_main_branch_masses = read_hdf5(tree_file,'/Mainbranch/MainbranchMass')
     tree_main_branch_masses = tree_main_branch_masses/hubble_parameter
 
@@ -205,9 +212,25 @@ def read_satgen(ver=3):
                 main[odn] = read_hdf5(data_path+'prog_evo_1000_mixed_logmass_{}_disk.hdf5'.format(odn),
                                       main_dataset_names,group='/MainBranches')
 
+    # This version uses smooth concentration
     elif ver==3:
-        data_path = dir_path+'reionoutput/evolve_ver3/'
+        data_path = dir_path+'reionoutput/evolve_ver3/smooth_concentration/'
 
+        output_dataset_names = ['emerge']
+        prog_dataset_names = ['coors','has_galaxy','itree','levels_at_tsteps','nprog',
+                                'prog_masses','prog_mstars','radii','status','t_proc','tage',
+                                'tree_idx','tsteps']
+        main_dataset_names = ['main_branch_halo_mass','main_branch_halo_c','main_branch_disk_mass','main_branch_disk_reff']
+
+        for odn in output_dataset_names:
+            data[odn] = read_hdf5(data_path+'prog_evo_1000_mixed_logmass_EMERGE_disk.hdf5',prog_dataset_names,group='/Progenitors')
+            if odn != 'no':
+                main[odn] = read_hdf5(data_path+'prog_evo_1000_mixed_logmass_EMERGE_disk.hdf5',main_dataset_names,group='/MainBranches')
+
+    # This version uses zhao concentration
+    elif ver==301:
+
+        data_path = dir_path+'reionoutput/evolve_ver3/zhao_concentration/'
         output_dataset_names = ['emerge']
         prog_dataset_names = ['coors','has_galaxy','itree','levels_at_tsteps','nprog',
                                 'prog_masses','prog_mstars','radii','status','t_proc','tage',
@@ -228,8 +251,21 @@ def read_satgen(ver=3):
         data = read_hdf5(data_path+'test.hdf5',prog_dataset_names,group='/Progenitors')
         main = read_hdf5(data_path+'test.hdf5',main_dataset_names,group='/MainBranches')
 
+    elif ver==-2:
+        data_path = dir_path+'debug_lower_mass_range/'
+
+        output_dataset_names = ['emerge']
+        prog_dataset_names = ['coors','has_galaxy','itree','levels_at_tsteps','nprog',
+                                'prog_masses','prog_mstars','radii','status','t_proc','tage',
+                                'tree_idx','tsteps']
+        main_dataset_names = ['main_branch_halo_mass','main_branch_halo_c','main_branch_disk_mass','main_branch_disk_reff']
+
+        for odn in output_dataset_names:
+            data[odn] = read_hdf5(data_path+'prog_evo_1000_mixed_logmass_EMERGE_disk.hdf5',prog_dataset_names,group='/Progenitors')
+            if odn != 'no':
+                main[odn] = read_hdf5(data_path+'prog_evo_1000_mixed_logmass_EMERGE_disk.hdf5',main_dataset_names,group='/MainBranches')
         
-    if ver in (2,3,-1):
+    if ver in (2,3,301,-1,-2):
         return data,main
     return data   
 #########################################################
@@ -347,54 +383,6 @@ def volume_weight(root_mass):
     
     return weights
 
-def mod_Mstar(hm,h=0.73,z=0.,choice='B13',task='Mstar'):
-    """
-    Customized Mstar 
-    The halo mass from our eps tree already dealt with h
-    
-    B13 assumed parameters: Omega_M = 0.27
-                            Omega_lambda = 0.73
-                            h = 0.7
-                            ns = 0.95
-                            sigma8 = 0.82
-
-    B19 assumed parameters: h = 0.678
-
-    Parameters: h: Hubble parameter assumed in the merger tree
-                hm: linear halo mass
-
-    Return: linear stellar mass
-
-    """
-
-    if choice=='B13':
-        h_model = 0.7
-        hm *= (h/h_model)
-        if task=='Mstar':
-            sm = init.Mstar(hm,z,choice=choice)
-        elif task=='lgMs_B13':
-            sm = 10**gh.lgMs_B13(np.log10(hm),z)
-        else:
-            raise ValueError(f"Invalid task '{task}' for choice 'B13'")
-        
-    elif choice=='RP17':
-        h_model = 0.7 # Not used, needs to check
-        hm *= (h/h_model)
-        if task=='Mstar':
-            sm = init.Mstar(hm,z,choice=choice)
-        elif task=='lgMs_RP17':
-            sm = 10**gh.lgMs_RP17(np.log10(hm),z)
-        else:
-            raise ValueError(f"Invalid task '{task}' for choice 'RP17'")
-
-    elif choice=='B19':
-        h_model = 0.678
-        hm *= (h/h_model)
-        raise NotImplementedError('B19: Not provide now')
-        
-    sm *= (h_model/h)
-    return sm
-
 
 def avg_smhm(n,return_edge=False):
     """
@@ -418,7 +406,7 @@ def avg_smhm(n,return_edge=False):
     minsm = []
 
     for hm in hmrange:
-        smlist = [mod_Mstar(hm,z=z, choice='B13',task='Mstar') for z in Nz]
+        smlist = [sga.mod_Mstar(hm,z=z, choice='B13',task='Mstar') for z in Nz]
         avgsm.append(np.median(smlist))
         maxsm.append(max(smlist))
         minsm.append(min(smlist))
@@ -653,9 +641,9 @@ def plot_b13_satgen(ax,sigma=1,color='grey',z0_smhm=False):
     smmin = []
     for hmr in hmrange:
         if z0_smhm:
-            sm = np.log10([mod_Mstar(hmr,z=0,task='lgMs_B13') for zr in zrange])
+            sm = np.log10([sga.mod_Mstar(hmr,z=0,task='lgMs_B13') for zr in zrange])
         else:
-            sm = np.log10([mod_Mstar(hmr,z=zr,task='lgMs_B13') for zr in zrange])
+            sm = np.log10([sga.mod_Mstar(hmr,z=zr,task='lgMs_B13') for zr in zrange])
         smmax.append(max(sm)+0.2*sigma)
         smmin.append(min(sm)-0.2*sigma)
 
@@ -1235,40 +1223,47 @@ def plot_mdyn_Rvdyn(age,mass,conc,zred):
     pl.ylabel(r'$\dot{Rv_{tdyn}} \, (\mathrm{kpc})$')
     return
 
-def plot_EMERGE(itree,hm,z,cosmology,choice='history'):
-
+def plot_EMERGE(itree,hm,z,cosmology,choice='history',result=None):
+    '''
+    If reuslt is given, itree is not used.
+    '''
     b13sm = np.array([gh.lgMs_B13(np.log10(hm_tree),z) for hm_tree in hm])
     b13sm50 = np.percentile(b13sm,50,axis=0)
     b13sm1sigma = np.percentile(b13sm,84.1,axis=0)
     b13sm_err = b13sm1sigma-b13sm50
 
-    hosts = [
-        sga.Host(hm[i], z, cosmology,
-                 fd=0.1, flattening=25.,
-                 disk_method='EMERGE',
-                 walk_tree='forward',
-                 cooling_threshold=False,
-                 z0_smhm=False)
-        for i in itree
-    ]
+    if result == None:
+        hosts = [
+            sga.Host(hm[i], z, cosmology,
+                     fd=0.1, flattening=25.,
+                     disk_method='EMERGE',
+                    walk_tree='forward',
+                    cooling_threshold=False,
+                    z0_smhm=False)
+            for i in itree
+        ]
     
-    z      = np.array([h._tree_zred      for h in hosts])
-    dm     = np.log10([h.disk_mass       for h in hosts])
-    hm     = np.log10([h.mass            for h in hosts])
-    b13sm  = np.array([gh.lgMs_B13(np.log10(h.mass), h._tree_zred) for h in hosts])
-    z1     = np.array([h._tree_zred+1      for h in hosts])
+        z      = np.array([h._tree_zred      for h in hosts])
+        dm     = np.log10([h.disk_mass       for h in hosts])
+        hm     = np.log10([h.mass            for h in hosts])
+        b13sm  = np.array([gh.lgMs_B13(np.log10(h.mass), h._tree_zred) for h in hosts])
+        z1     = np.array([h._tree_zred+1      for h in hosts])
+    else:
+        z  = np.tile(z,(1000,1))
+        dm = np.log10(result['main_branch_disk_mass'])
+        hm = np.log10(result['main_branch_halo_mass'])
+        
     
-    print('init redshift check: ',z[:,-1])
-    print('init disk mass check: ',dm[:,-1])     
     if choice=='history':
         pl.plot(z.T,dm.T,alpha=0.2,c='b')
         pl.plot(z.T,hm.T,alpha=0.2,c='k')
         pl.xlabel('z')
     elif choice=='smhm':
-        pl.plot(hm.T,dm.T)
+        pl.plot(hm.T,dm.T,alpha=0.1)
         ax = pl.gca()
-        plot_b13_satgen(ax)
-        pl.ylabel('$\mathrm{log_{10}\,halo\,mass}$')
+        #plot_b13_satgen(ax)
+        plot_m18(ax)
+        pl.xlabel('$\mathrm{log_{10}\,halo\,mass}$')
 
     pl.ylabel('$\mathrm{log_{10}\,disk\,mass}$')
 
@@ -1308,6 +1303,151 @@ def plot_m18smhm(progs):
     pl.ylabel('$\mathrm{log_{10}\,stellar\,mass}$')
     pl.legend(frameon=False,loc='lower right')
     return
+
+def plot_integrate_instant(main,root_mass):
+    """
+    This checks the instantanious baryonic conversion efficiency can grow 
+    a disk that matches the integrated smhm relation
+    """
+
+    disk_mass = main['emerge']['main_branch_disk_mass']
+    halo_mass = main['emerge']['main_branch_halo_mass']
+
+    root_lgmass    = np.log10(halo_mass[:,0])
+    z0_disk_lgmass = np.log10(disk_mass[:,0])
+
+    fb = 0.156
+    #root_lgmass = np.log10(root_mass)
+
+    # redshift 0 m18 relation with 1 sigma
+    hm_range = np.arange(10,14,0.2)
+    upper_lgsm = []
+    lower_lgsm = []
+    for hm in hm_range:
+        hm = 10**hm
+        e,sigma = sga.integrate_b_conversion(0,hm)
+        mean_sm = fb*(hm)*e
+        upper_lgsm.append(np.log10(mean_sm)+sigma)
+        lower_lgsm.append(np.log10(mean_sm)-sigma)
+
+    ax = pl.gca()
+    #plot_m18(ax)
+
+    ax.fill_between(hm_range,upper_lgsm,lower_lgsm,alpha=0.5)
+    pl.scatter(root_lgmass,z0_disk_lgmass,s=1)
+    pl.xlim(11,13)
+    pl.ylim(7,12)
+    return
+
+def plot_instb_coeff(redshift_index=None):
+    """
+    M18 fig2
+    redshift_index 13 ~ 0.1
+    """
+
+    tree_redshifts,root_mass,_,tree_main_branch_masses = read_tree()
+
+    pl.figure()
+    if redshift_index is None:
+        for i,z in enumerate(tree_redshifts):
+            ez = np.array(sga.inst_b_conversion(tree_main_branch_masses[:,i],z,h=0.7))
+        
+            pl.scatter(np.log10(tree_main_branch_masses[:,i]),ez,s=1)
+    else:
+        ez = np.array(sga.inst_b_conversion(tree_main_branch_masses[:,redshift_index],
+                      tree_redshifts[redshift_index]))
+        pl.scatter(np.log10(tree_main_branch_masses[:,redshift_index]),ez,s=1)
+    return
+
+def plot_inteb_coeff():
+    """
+    index 13 ~ z=0.1
+    """
+    tree_redshifts,root_mass,_,tree_main_branch_masses = read_tree()
+    zred = np.tile(tree_redshifts,(1000,1))
+    ez,sigma = np.array(sga.integrate_b_conversion(zred,tree_main_branch_masses,h=0.7))
+    pl.scatter(np.log10(tree_main_branch_masses),ez,s=1)
+    return
+
+def plot_mstar_mb():
+    """
+    index 13 ~ z=0.1
+    m18 fig12
+    """
+    tree_redshifts,root_mass,progs,tree_main_branch_masses = read_tree(tree_setup='extend')
+    fb = 0.156
+
+    mass  = tree_main_branch_masses[:,13]
+    mstar = sga.mod_Mstar(mass,h=0.7,z=tree_redshifts[13],choice='m18',task='Mstar')
+    mb    = mass * fb
+    y1    = mstar/mb
+
+    prog_z01_index  = np.where(progs['ProgenitorZred']==tree_redshifts[13])[0]
+    print('total number of progenitros: ',len(progs['ProgenitorZred']),'number of progenitors at z=0.1: ',len(prog_z01_index))
+    prog_z01_masses = progs['ProgenitorMass'][prog_z01_index]
+    mstar_prog = sga.mod_Mstar(prog_z01_masses,h=0.7,z=tree_redshifts[13],choice='m18',task='Mstar')
+    mb_prog    = prog_z01_masses * fb
+    print(mstar_prog.shape,mb_prog.shape)
+    y2 = mstar_prog/mb_prog
+    print(np.argmax(y2))
+    print('halo mass: ',prog_z01_masses[np.argmax(y2)])
+    print(mstar_prog[np.argmax(y2)],mb_prog[np.argmax(y2)])
+
+    # more checks
+    frac = mstar_prog/prog_z01_masses
+    print('The highest mstar to mhalo fraction: ',max(frac),'mstar: ',mstar_prog[np.argmax(frac)],'mhalo: ',prog_z01_masses[np.argmax(frac)])
+    print('This prog index: ',prog_z01_index[np.argmax(frac)])
+    
+    y = np.concatenate((y1,y2))
+    lg_main_mass = np.log10(mass)
+    lg_prog_mass = np.log10(prog_z01_masses)
+    x = np.concatenate((lg_main_mass,lg_prog_mass))
+
+    totmass = 10**x
+    e,sigma = np.array(sga.integrate_b_conversion(tree_redshifts[13],totmass,h=0.7))
+
+    moster_18_default = partial(moster_18_eff_func,M1=10**11.80,epsilon=0.14,beta=1.75,gamma=0.57)
+    e1 = moster_18_default(totmass)
+
+    lghmrange = np.arange(10,14,0.1)
+    e2,_ = np.array(sga.integrate_b_conversion(tree_redshifts[13],10**lghmrange,h=0.7))
+
+    pl.figure()
+    pl.scatter(x,y,s=1,c='r')
+    pl.scatter(x,e,s=1,c='k')
+    pl.scatter(x,e1,s=1,c='b')
+    pl.plot(lghmrange,e2,c='green')
+    return
+
+def plot_conc_z(host1,host2):
+    """
+    Check smooth concentraion vs zhao concentration by redshifts (Ludluw 2016. fig.4)
+    z = 1,2,3 ~ index = 77,102,123
+    """
+
+    tree_redshifts,_,_,_ = read_tree(tree_setup='extend')
+    concentration1 = host1['emerge']['main_branch_halo_c']
+    concentration2 = host2['emerge']['main_branch_halo_c']
+    mhalo1 = host1['emerge']['main_branch_halo_mass']
+    mhalo2 = host2['emerge']['main_branch_halo_mass']
+
+    lgconc1  = np.log10(concentration1)
+    lgconc2  = np.log10(concentration2)
+    lgmhalo1 = np.log10(mhalo1)
+    lgmhalo2 = np.log10(mhalo2)
+
+    colors = ['grey','b','y','r']
+
+    pl.figure()
+    for i,zi in enumerate(np.array([0])):#,77,102,113])):
+        z = tree_redshifts[zi]
+        #pl.scatter(lgmhalo1,lgconc1,c=colors[i],alpha=0.5,s=1,label=f'{z}')
+        pl.scatter(lgmhalo2,lgconc2,c=colors[i],alpha=0.5,s=1,label=f'{z}')
+        #pl.plot()
+
+    pl.legend()
+    return
+
 #########################################################
 ### debug
 def debug_prog_matching(data,models,r=10,f=100):
@@ -1357,25 +1497,41 @@ def debug_prog_matching(data,models,r=10,f=100):
     print("Progenitors have large initial mass difference ({} times): ".format(f),mcounter)
     return #i_rdiff_far,i_hmdiff_large
 
-def debug_smhm_range(nrepeat):
+def debug_smhm_range(nrepeat,zrange=None,hmrange=None,choice='B13'):
     """
     """
+    if zrange is None:
+        zrange  = np.arange(0,24,0.2)
+    else:
+        zrange==zrange
 
-    zrange  = np.arange(0,24,0.2)
-    hmrange = 10**np.arange(9,12.7,0.2)    
+    if hmrange is None:
+        hmrange = 10**np.arange(9,12.7,0.2)    
+        pl.xlim(9,13)
+    else:
+        hmrange==hmrange
+        pl.xlim(min(hmrange),max(hmrange))
+
+    maxsm = 0
 
     pl.figure(figsize=(8,6))
 
     for hm in hmrange:
         for _ in np.arange(nrepeat):
-            sm = np.array([mod_Mstar(hm,z=z,choice='B13',task='Mstar') for z in zrange])
+            sm = np.array([sga.mod_Mstar(hm,z=z,choice=choice,task='Mstar') for z in zrange])
+            maxsm_this_range = max(sm)
+            if maxsm_this_range>maxsm:
+                maxsm = maxsm_this_range
             pl.scatter(np.repeat(np.log10(hm),len(sm)),np.log10(sm),s=2)
+
+    print('max sm: ',maxsm)
+
     ax = pl.gca()
-    plot_b13_satgen(ax)
+    if choice=='B13':
+        plot_b13_satgen(ax)
 
     pl.xlabel('$\mathrm{\log_{10}\, halo \,mass\,(M_{\odot})}$',fontsize=15)
     pl.ylabel('$\mathrm{\log_{10}\, stellar(disk) \,mass\,(M_{\odot})}$',fontsize=15)
-    pl.xlim(9,12.5)
     pl.ylim(5,11.5)
 
     return

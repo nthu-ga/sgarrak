@@ -281,7 +281,7 @@ if __name__ == '__main__':
                                    walk_tree = args.walk_tree,
                                    mstar_shift = args.mstar_shift,
                                    smhm = args.smhm,
-                                   orbit_init_method = arg.orbit_init_method,
+                                   orbit_init_method = args.orbit_init_method,
                                    n_substeps = args.substeps,
                                    progenitors=progenitors,
                                    tree_main_branch_masses=tree_main_branch_masses,

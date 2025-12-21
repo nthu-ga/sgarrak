@@ -97,7 +97,7 @@ def is_iterable(x):
     return False
 
 ############################################################
-def mod_Mstar(hm,h=0.7,z=0.,choice='m13',task='Mstar',**kwargs):
+def mod_Mstar(hm,h=0.7,z=0.,choice='m18',task='Mstar',**kwargs):
     """
     Customized Mstar 
     The halo mass from our eps tree already dealt with h
@@ -110,8 +110,9 @@ def mod_Mstar(hm,h=0.7,z=0.,choice='m13',task='Mstar',**kwargs):
 
     B19 assumed parameters: h = 0.678
 
-    M18 adjusts h in the parameters. delta_t is now total age.
+    m18 adjusts h in the parameters. delta_t is now total age.
     It only gives Mstar for the smhm relation.
+    m18 assume a baryonic fraction value, but satgen uses cfg.Ob/cfg.Om.
 
     Parameters: h: Hubble parameter assumed in the merger tree
                 hm: linear halo mass
@@ -147,10 +148,10 @@ def mod_Mstar(hm,h=0.7,z=0.,choice='m13',task='Mstar',**kwargs):
 
     elif choice=='m18':
         h_model = 0.678
-        fb = 0.156
+        fb = 0.156 # cfg.Ob/cfg.Om
         e,sigma = integrate_b_conversion(z,hm,h=h_model)
-        sm = 10**(np.random.normal(np.log10(fb*hm*e),sigma)) #fb*hm*e
-
+        # Should it have a lower limit of hm*fb?
+        sm = 10**(np.random.normal(np.log10(fb*hm*e),sigma)) 
     sm *= (h_model/h)
     return sm 
 
@@ -253,8 +254,8 @@ def inst_b_conversion(M,z,h=0.7):
     """
 
     # Table 6; best fit
-    M0 = 10**11.339
-    Mz = 10**0.692
+    M0 = 11.339
+    Mz = 0.692
     e0 = 0.005
     ez = 0.689
     beta0   = 3.344
@@ -263,16 +264,16 @@ def inst_b_conversion(M,z,h=0.7):
     h_model = 0.6781
 
     # h correction
-    M0 *= h_model/h
-    Mz *= h_model/h
+    M0 += np.log10(h_model/h)
+    Mz += np.log10(h_model/h)
     
     a = 1/(z+1)
-    M1 = M0 + Mz*(1-a)            # eq.7
+    lgM1 = M0 + Mz*(1-a)          # eq.7
     en = e0 + ez * (1-a)          # eq.8
     beta  = beta0 + betaz * (1-a) # eq.9
     gamma = gamma0                # eq.10
-
-    return 2 * en * ((M/M1)**-beta + (M/M1)**gamma)**-1 # eq.5
+    M1 = 10**lgM1
+    return 2 * en / ((M/M1)**-beta + (M/M1)**gamma) # eq.5
 
 def calculate_tdyn(age,mass,conc,zred,h=0.7,return_lgmass=False):
     """
@@ -438,7 +439,8 @@ class Host():
         self.t_lbk = self.cosmology.lookback_time(self.zred).value       
         
         if self.evolving_mass:
-            self.concentration = halo_mah_to_zhao_c_nfw(self.mass, self.t_age)
+            #self.concentration = halo_mah_to_zhao_c_nfw(self.mass, self.t_age)
+            self.concentration = smooth_c(self.mass,self.t_age,version='zhao')
         else:
             self.concentration = np.atleast_1d(init.concentration(self.mass[0], self.zred[0], choice='DM14'))
             
@@ -459,7 +461,7 @@ class Host():
         M_dot_dyn,Rv_dot_dyn,self.tdyn_pf,self.tdyn_cal,self.Rv = calculate_tdyn(self.t_age,self._tree_mass,self.concentration,self.zred,return_lgmass=False)
 
 
-        # Make a profile for each timestep
+        # Make a profile for each redshift
         self.dens_profile = list()
         self.halo_dens_profile = list()
         self.has_disk = fd > 0
@@ -800,6 +802,15 @@ def halo_mah_to_zhao_c_nfw(mass, t_age_gyr):
         h_c_nfw.append(init.c2_fromMAH(mass[i:],t_age_gyr[i:]))
     return np.array(h_c_nfw)
 
+def smooth_c(Mv,t,version='zhao'):
+    if(version == 'vdb'):
+        coeff1 = 3.40
+        coeff2 = 6.5
+    elif(version == 'zhao'):
+        coeff1 = 3.75
+        coeff2 = 8.4
+    idx = aux.FindNearestIndex(Mv,0.04*Mv[0])
+    return 4.*(1.+(t/(coeff1*t[idx]))**coeff2)**0.125
 ############################################################
 def compute_coordinates(xv):
     """
@@ -816,24 +827,121 @@ def compute_coordinates(xv):
     Y = R*np.sin(phi)
     return np.array([X,Y,Z])
 
-############################################################
-def reshape_coors(coorlist,Narray):
-    """
-    Re-shape the coors list to be the same size to the 
-    other parameters when it is below mres/rres(?).
-    """
-    
-    below_res_coor = [-1,-1,-1]
-    if len(coorlist)!=Narray:
-        below_res_steps = Narray-len(coorlist)
-        coorlist.extend([below_res_coor]*below_res_steps)
-    return
+import numpy as np
 
+def cylindrical_to_cartesian_phase(R, phi, z, VR, Vphi, Vz):
+    """
+    Convert 6D cylindrical (R,phi,z,VR,Vphi,Vz)
+    to Cartesian (x,y,z,vx,vy,vz).
+
+    Parameters
+    ----------
+    R, phi, z, VR, Vphi, Vz : array_like
+        Cylindrical position–velocity components.
+
+    Returns
+    -------
+    x, y, z, vx, vy, vz : ndarray
+        Cartesian components, same broadcasted shape.
+    """
+    R  = np.asarray(R)
+    phi = np.asarray(phi)
+    z  = np.asarray(z)
+    VR = np.asarray(VR)
+    Vphi = np.asarray(Vphi)
+    Vz = np.asarray(Vz)
+
+    # Position
+    x = R * np.cos(phi)
+    y = R * np.sin(phi)
+
+    # Velocities
+    vx = VR * np.cos(phi) - Vphi * np.sin(phi)
+    vy = VR * np.sin(phi) + Vphi * np.cos(phi)
+    vz = Vz
+
+    return x, y, z, vx, vy, vz
+
+def valid_coors(coors):
+    """
+    This function filters [-1,-1,-1] in the coordinate array.
+
+    [-1,-1,-1] coordinates were fiiled in when a progenitor was·
+    below the cfg resolution to keep the arrays having the same shape.
+    """
+
+    mask = ~(np.all(coors == -1, axis=1))
+    coors_valid = coors[mask]
+
+    return coors_valid
+############################################################
+def reshape_to_tsteps_shape(input_array, t_shape, task='coor'):
+    """
+    Pad an array along the time axis to have length t_shape.
+
+    Parameters
+    ----------
+    input_array : array-like
+        Shape (n_steps, ndim) or list of length n_steps.
+    t_shape : int
+        Desired number of timesteps.
+    task : {'coor', 'xv'}
+        'coor' -> 3D positions, pad with [-1, -1, -1]
+        'xv'   -> 6D phase space, pad with 6 x -1
+
+    Returns
+    -------
+    arr : np.ndarray
+        Array of shape (t_shape, ndim), padded with -1 rows
+        at the end if input is shorter. If already length
+        t_shape, returned unchanged. If longer, raises.
+    """
+
+    if task == 'coor':
+        below_res_arr = [-1, -1, -1]
+    elif task == 'xv':
+        below_res_arr = [-1, -1, -1, -1, -1, -1]
+    else:
+        raise ValueError('Not a task')
+
+    # Convert to array
+    arr = np.asarray(input_array)
+
+    # Handle the 1D case like a list of rows
+    ndim = len(below_res_arr)
+    if arr.ndim == 1:
+        # Try to infer if it's a single vector (len=ndim)
+        # or a flat list of length n_steps with unknown layout.
+        if arr.size == ndim:
+            arr = arr.reshape(1, ndim)
+        else:
+            # If this happens in your use case, we can refine this logic.
+            raise ValueError(f"Cannot interpret 1D input of length {arr.size} as (n_steps, {ndim}).")
+
+    if arr.shape[1] != ndim:
+        raise ValueError(
+            f"Expected second dimension {ndim} for task='{task}', "
+            f"got shape {arr.shape}."
+        )
+
+    n_steps = arr.shape[0]
+    if n_steps == t_shape:
+        return arr
+    if n_steps > t_shape:
+        raise ValueError(
+            f"Input has more timesteps ({n_steps}) than t_shape={t_shape}."
+        )
+
+    # Need to pad with -1 rows
+    below_res_steps = t_shape - n_steps
+    pad_block = np.full((below_res_steps, ndim), -1, dtype=arr.dtype)
+
+    return np.vstack([arr, pad_block])
 ############################################################
 def evolve_orbit(host, prog ,tsteps=None, 
                  evolve_prog_mass=False, 
                  evolve_past_res_limits=False,
-                 alpha_shift=None,dynamical_friction_shift=None):
+                 alpha_shift=None):
     """
     tstep: timesteps measured forwards from the initial conditions at 
         infall. 
@@ -855,6 +963,7 @@ def evolve_orbit(host, prog ,tsteps=None,
     prog_mstars = [prog.mstar_init]
     prog_status = [STATUS_PROG_INTACT]
     prog_coors  = [compute_coordinates(prog.xv)]    
+    prog_xv = []
     
     has_galaxy  = [prog.has_galaxy]
 
@@ -883,6 +992,7 @@ def evolve_orbit(host, prog ,tsteps=None,
     
     o = orbit(prog.xv)    
     xv     = o.xv 
+    prog_xv.append(xv)
     r      = np.sqrt(xv[0]**2+xv[2]**2)    
     r_init = r
     
@@ -954,16 +1064,14 @@ def evolve_orbit(host, prog ,tsteps=None,
 
         # Evolve the progenitor orbit based on the current mass
         # and host halo profile.
-        if dynamical_friction_shift is None:
-            o.integrate(t, host_dp, prog_mass)
-        else:
-            o.integrate(t, host_dp, prog_mass*dynamical_friction_shift)
+        o.integrate(t, host_dp, prog_mass)
         
         # Note that the coordinates are updated 
         # internally in the orbit instance "o" when calling
         # the ".integrate" method, here we assign them to 
         # a new variable "xv" only for bookkeeping
         xv  = o.xv 
+        prog_xv.append(xv)
         prog_coors.append(compute_coordinates(xv))
         r   = np.sqrt(xv[0]**2+xv[2]**2)
         radii.append(r)
@@ -1023,7 +1131,15 @@ def evolve_orbit(host, prog ,tsteps=None,
             prog_masses.append(prog_mass_init)
             prog_mstars.append(prog_mstar_init)
           
-    reshape_coors(prog_coors,len(tsteps))
+    prog_coors = reshape_to_tsteps_shape(np.array(prog_coors),len(tsteps))
+
+    prog_xv = np.array(prog_xv)
+    valid_prog_xv = valid_coors(prog_xv)
+    x, y, z, vx, vy, vz = cylindrical_to_cartesian_phase(
+    valid_prog_xv[:,0], valid_prog_xv[:,1], valid_prog_xv[:,2], valid_prog_xv[:,3],
+    valid_prog_xv[:,4], valid_prog_xv[:,5])
+    prog_pos_vel = np.array([x,y,z,vx,vy,vz]).T
+    prog_pos_vel = reshape_to_tsteps_shape(prog_pos_vel,len(tsteps),task='xv')
   
     # Return
     retdict = dict()
@@ -1040,10 +1156,11 @@ def evolve_orbit(host, prog ,tsteps=None,
     retdict['levels_at_tsteps'] = levels_at_tstep
     retdict['host_times_starting_from_initial_level'] = host_times_starting_from_initial_level
     retdict['has_galaxy']  = prog.has_galaxy
-
+    retdict['prog_xv'] = prog_xv
+    retdict['prog_pos_vel'] = prog_pos_vel
     # Note that the orbit xvArray property contains the phase space coordinate at each 
     # timestep, but, since this this computed by SatGen internally, it does not include
     # the initial conditions or any steps below the resolution limit. TODO?
-    retdict['coors'] = np.array(prog_coors)
+    retdict['coors'] = prog_coors
     
     return retdict
