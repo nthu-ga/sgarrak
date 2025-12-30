@@ -151,7 +151,9 @@ def mod_Mstar(hm,h=0.7,z=0.,choice='m18',task='Mstar',**kwargs):
         fb = 0.156 # cfg.Ob/cfg.Om
         e,sigma = integrate_b_conversion(z,hm,h=h_model)
         # Should it have a lower limit of hm*fb?
-        sm = 10**(np.random.normal(np.log10(fb*hm*e),sigma)) 
+        # sigma is for e or sm?
+        #sm = 10**(np.random.normal(np.log10(fb*hm*e),sigma)) 
+        sm = fb*hm*10**np.random.normal(np.log10(e),sigma)
     sm *= (h_model/h)
     return sm 
 
@@ -326,6 +328,9 @@ def calculate_tdyn(age,mass,conc,zred,h=0.7,return_lgmass=False):
 def integrate_b_conversion(zred,mass,h=0.7):
     """
     Integrated beryon conversion efficiency in Moster18
+
+    Parameters: zred: redshift. scaler
+                mass: halo mass. array or scaler
     """
 
     # coefficients, table 8 all centrals

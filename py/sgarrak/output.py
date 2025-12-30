@@ -1361,12 +1361,18 @@ def plot_instb_coeff(redshift_index=None):
 
 def plot_inteb_coeff():
     """
-    index 13 ~ z=0.1
     """
-    tree_redshifts,root_mass,_,tree_main_branch_masses = read_tree()
-    zred = np.tile(tree_redshifts,(1000,1))
-    ez,sigma = np.array(sga.integrate_b_conversion(zred,tree_main_branch_masses,h=0.7))
-    pl.scatter(np.log10(tree_main_branch_masses),ez,s=1)
+    zred = np.arange(0,14,2)
+    lghmrange = np.arange(8,13,0.2)
+    hmrange = 10**lghmrange
+
+    for z in zred:
+        ez,sigma = np.array(sga.integrate_b_conversion(z,hmrange,h=0.7))
+        pl.errorbar(lghmrange,ez,yerr=sigma,label=f'{z}')
+
+    pl.legend(frameon=False,prop={'size':6})
+    pl.xlabel('halo mass',fontsize=15)
+    pl.ylabel('e',fontsize=15)
     return
 
 def plot_mstar_mb():
@@ -1419,31 +1425,39 @@ def plot_mstar_mb():
     pl.plot(lghmrange,e2,c='green')
     return
 
-def plot_conc_z(host1,host2):
+def plot_conc_z():
     """
     Check smooth concentraion vs zhao concentration by redshifts (Ludluw 2016. fig.4)
     z = 1,2,3 ~ index = 77,102,123
     """
 
-    tree_redshifts,_,_,_ = read_tree(tree_setup='extend')
-    concentration1 = host1['emerge']['main_branch_halo_c']
-    concentration2 = host2['emerge']['main_branch_halo_c']
-    mhalo1 = host1['emerge']['main_branch_halo_mass']
-    mhalo2 = host2['emerge']['main_branch_halo_mass']
+    tree_redshift,root_mass,progenitors,mainbranch_mass = op.read_tree()
 
-    lgconc1  = np.log10(concentration1)
-    lgconc2  = np.log10(concentration2)
-    lgmhalo1 = np.log10(mhalo1)
-    lgmhalo2 = np.log10(mhalo2)
+    # Only load progenitors
+    prog_mass = progenitors['ProgenitorMass']
+    prog_zred = progenitors['ProgenitorZred']
+    prog_tage = cosmology.age(prog_zred).value
+
+    # Get the progenitor concentrations
+    prog_smooth_c = sga.smooth_c(prog_mass,prog_tage,version='zhao')
+    prog_zhao_c   = sga.halo_mah_to_zhao_c_nfw(prog_mass, prog_tage)
+
+    lgconc_smooth  = np.log10(prog_smooth_c)
+    lgconc_zhao    = np.log10(prog_zhao_c)
+    lgmhalo = np.log10(prog_mass)
 
     colors = ['grey','b','y','r']
 
-    pl.figure()
-    for i,zi in enumerate(np.array([0])):#,77,102,113])):
-        z = tree_redshifts[zi]
-        #pl.scatter(lgmhalo1,lgconc1,c=colors[i],alpha=0.5,s=1,label=f'{z}')
-        pl.scatter(lgmhalo2,lgconc2,c=colors[i],alpha=0.5,s=1,label=f'{z}')
-        #pl.plot()
+    pl.figure(24,7)
+
+    pl.subplot(131)
+    pl.scatter(lgmhalo[77],lgconc_smooth[77],alpha=0.5,label='z=1',c='b')
+
+    pl.subplot(132)
+    pl.scatter(lgmhalo[102],lgconc_smooth[102],alpha=0.5,label='z=2',c='y')
+
+    pl.subplot(133)
+    pl.scatter(lgmhalo[113],lgconc_smooth[113],alpha=0.5,label='z=3',c='r')
 
     pl.legend()
     return
@@ -1497,7 +1511,7 @@ def debug_prog_matching(data,models,r=10,f=100):
     print("Progenitors have large initial mass difference ({} times): ".format(f),mcounter)
     return #i_rdiff_far,i_hmdiff_large
 
-def debug_smhm_range(nrepeat,zrange=None,hmrange=None,choice='B13'):
+def debug_smhm_range(nrepeat,zrange=None,hmrange=None,choice='B13',plot_figure=True):
     """
     """
     if zrange is None:
@@ -1507,14 +1521,12 @@ def debug_smhm_range(nrepeat,zrange=None,hmrange=None,choice='B13'):
 
     if hmrange is None:
         hmrange = 10**np.arange(9,12.7,0.2)    
-        pl.xlim(9,13)
+        lghmrange = np.log10(hmrange)
     else:
         hmrange==hmrange
-        pl.xlim(min(hmrange),max(hmrange))
+        lghmrange = np.log10(hmrange)
 
     maxsm = 0
-
-    pl.figure(figsize=(8,6))
 
     for hm in hmrange:
         for _ in np.arange(nrepeat):
@@ -1522,17 +1534,25 @@ def debug_smhm_range(nrepeat,zrange=None,hmrange=None,choice='B13'):
             maxsm_this_range = max(sm)
             if maxsm_this_range>maxsm:
                 maxsm = maxsm_this_range
-            pl.scatter(np.repeat(np.log10(hm),len(sm)),np.log10(sm),s=2)
+                hm_this_sm = hm
+                z_this_sm  = zrange[np.argmax(sm)]
+            if plot_figure:
+                pl.scatter(np.repeat(np.log10(hm),len(sm)),np.log10(sm),s=2)
 
-    print('max sm: ',maxsm)
+    print('max sm: ',maxsm,'hm for this sm: ',hm_this_sm,'z for this sm: ',z_this_sm)
 
-    ax = pl.gca()
-    if choice=='B13':
-        plot_b13_satgen(ax)
+    if plot_figure:
+        #pl.figure(figsize=(8,6))
+        if choice=='B13':
+            ax = pl.gca()
+            plot_b13_satgen(ax)
 
-    pl.xlabel('$\mathrm{\log_{10}\, halo \,mass\,(M_{\odot})}$',fontsize=15)
-    pl.ylabel('$\mathrm{\log_{10}\, stellar(disk) \,mass\,(M_{\odot})}$',fontsize=15)
-    pl.ylim(5,11.5)
+        pl.xlabel('$\mathrm{\log_{10}\, halo \,mass\,(M_{\odot})}$',fontsize=15)
+        pl.ylabel('$\mathrm{\log_{10}\, stellar(disk) \,mass\,(M_{\odot})}$',fontsize=15)
+        if hmrange is None:
+            pl.ylim(9,13)
+        else:
+            pl.xlim(min(lghmrange),max(lghmrange))
 
     return
 
