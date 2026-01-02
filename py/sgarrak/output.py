@@ -1370,7 +1370,7 @@ def plot_inteb_coeff():
         ez,sigma = np.array(sga.integrate_b_conversion(z,hmrange,h=0.7))
         pl.errorbar(lghmrange,ez,yerr=sigma,label=f'{z}')
 
-    pl.legend(frameon=False,prop={'size':6})
+    pl.legend(frameon=False,prop={'size':8},ncols=2)
     pl.xlabel('halo mass',fontsize=15)
     pl.ylabel('e',fontsize=15)
     return
@@ -1425,43 +1425,41 @@ def plot_mstar_mb():
     pl.plot(lghmrange,e2,c='green')
     return
 
-def plot_conc_z():
+def plot_conc_to_hm_smooth_zhao():
     """
     Check smooth concentraion vs zhao concentration by redshifts (Ludluw 2016. fig.4)
     z = 1,2,3 ~ index = 77,102,123
+
+    Note: The concentration function reads the tage history, not the instantanious age.
+    The current eps tree has only main branch history, so it can not reproduce the figure 4 
+    due to the real abundance.
+    Unless there is a need for running the whole tree history, this will not be checked.
+    Also the concentration for subhalos used DM14 in Satgen.
     """
 
-    tree_redshift,root_mass,progenitors,mainbranch_mass = op.read_tree()
-
-    # Only load progenitors
-    prog_mass = progenitors['ProgenitorMass']
-    prog_zred = progenitors['ProgenitorZred']
-    prog_tage = cosmology.age(prog_zred).value
-
-    # Get the progenitor concentrations
-    prog_smooth_c = sga.smooth_c(prog_mass,prog_tage,version='zhao')
-    prog_zhao_c   = sga.halo_mah_to_zhao_c_nfw(prog_mass, prog_tage)
-
-    lgconc_smooth  = np.log10(prog_smooth_c)
-    lgconc_zhao    = np.log10(prog_zhao_c)
-    lgmhalo = np.log10(prog_mass)
-
-    colors = ['grey','b','y','r']
-
-    pl.figure(24,7)
-
-    pl.subplot(131)
-    pl.scatter(lgmhalo[77],lgconc_smooth[77],alpha=0.5,label='z=1',c='b')
-
-    pl.subplot(132)
-    pl.scatter(lgmhalo[102],lgconc_smooth[102],alpha=0.5,label='z=2',c='y')
-
-    pl.subplot(133)
-    pl.scatter(lgmhalo[113],lgconc_smooth[113],alpha=0.5,label='z=3',c='r')
-
-    pl.legend()
     return
 
+def plot_conc_to_tage_smooth_zhao(itree):
+    """
+    """
+
+    tree_redshift,root_mass,progenitors,mainbranch_mass = read_tree()
+
+    tage = cosmology.age(tree_redshift).value
+    smooth_c = sga.smooth_c(mainbranch_mass[itree],tage,version='zhao')
+    zhao_c   = sga.halo_mah_to_zhao_c_nfw(mainbranch_mass[itree],tage)
+
+    lgsmooth_c = np.log10(smooth_c)
+    lgzhao_c   = np.log10(zhao_c)
+
+    pl.figure()
+
+    pl.plot(tage,lgsmooth_c,label='smooth')
+    pl.plot(tage,lgzhao_c,label='zhao')
+    pl.xlabel('age (Gyr)')
+    pl.ylabel('lg conc')
+    pl.legend()
+    return
 #########################################################
 ### debug
 def debug_prog_matching(data,models,r=10,f=100):
