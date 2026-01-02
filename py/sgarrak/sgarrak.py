@@ -151,9 +151,7 @@ def mod_Mstar(hm,h=0.7,z=0.,choice='m18',task='Mstar',**kwargs):
         fb = 0.156 # cfg.Ob/cfg.Om
         e,sigma = integrate_b_conversion(z,hm,h=h_model)
         # Should it have a lower limit of hm*fb?
-        # sigma is for e or sm?
-        #sm = 10**(np.random.normal(np.log10(fb*hm*e),sigma)) 
-        sm = fb*hm*10**np.random.normal(np.log10(e),sigma)
+        sm = np.minimum(fb*hm,10**(np.random.normal(np.log10(fb*hm*e),sigma)))
     sm *= (h_model/h)
     return sm 
 
