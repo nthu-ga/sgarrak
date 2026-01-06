@@ -1439,26 +1439,107 @@ def plot_conc_to_hm_smooth_zhao():
 
     return
 
-def plot_conc_to_tage_smooth_zhao(itree):
+def plot_conc_and_rs_to_tage_smooth_zhao(itree,y1='c',y2='rs'):
     """
     """
 
     tree_redshift,root_mass,progenitors,mainbranch_mass = read_tree()
 
     tage = cosmology.age(tree_redshift).value
+
+    # Concentration
     smooth_c = sga.smooth_c(mainbranch_mass[itree],tage,version='zhao')
     zhao_c   = sga.halo_mah_to_zhao_c_nfw(mainbranch_mass[itree],tage)
 
     lgsmooth_c = np.log10(smooth_c)
     lgzhao_c   = np.log10(zhao_c)
 
-    pl.figure()
+    # Scale radius
+    nlev = len(tree_redshift)
+    idx_iter = range(nlev)
 
-    pl.plot(tage,lgsmooth_c,label='smooth')
-    pl.plot(tage,lgzhao_c,label='zhao')
-    pl.xlabel('age (Gyr)')
-    pl.ylabel('lg conc')
-    pl.legend()
+    # halo mass
+    mhalo   = mainbranch_mass[itree]
+    lgmhalo = np.log10(mhalo)
+
+    srs = []
+    zrs = []
+    for i in idx_iter:
+
+        mass_i = mhalo[i]
+        sc_i = smooth_c[i]
+        zc_i = zhao_c[i]
+        z_i = tree_redshift[i]
+
+        shalo_profile = NFW(mass_i,sc_i,Delta=200.,z=z_i,sf=1.)
+        zhalo_profile = NFW(mass_i,zc_i,Delta=200.,z=z_i,sf=1.)
+
+        srs.append(shalo_profile.rs)
+        zrs.append(zhalo_profile.rs)
+
+    ax1 = pl.subplot(111)
+
+    pl.plot(tage,lgsmooth_c,label='smooth',c='k')
+    pl.plot(tage,lgzhao_c,label='zhao',c='r')
+    pl.ylabel('$\mathrm{log_{10}\, c}$',fontsize=15)
+    legend1 = pl.legend(loc='upper left',frameon=False,prop={'size':10})
+
+    ax2 = ax1.twinx()
+
+    if y2=='rs':
+        pl.plot(tage,srs,c='k',ls='--')
+        pl.plot(tage,zrs,c='r',ls='--')
+        pl.ylabel('$\mathrm{r_{s} \, (kpc)}$',fontsize=15)
+
+        labels = ['concentration','scale radius']
+    elif y2=='hm':
+        pl.plot(tage,lgmhalo,c='k',ls='--')
+        pl.plot(tage,lgmhalo,c='r',ls='--')
+        pl.ylabel('$\mathrm{log_{10} \, halo\, mass(M_{\odot})}$',fontsize=15)
+
+        labels = ['concentration','halo mass']
+
+    ax1.set_xlabel('age (Gyr)',fontsize=15)
+
+    l1 = pl.Line2D([0,0],[0,0],ls='solid',c='k')
+    l2 = pl.Line2D([0,0],[0,0],ls='dashed',c='k')
+    handles = [l1,l2]
+    legend2 = pl.legend(handles,labels,loc='lower right',frameon=False,prop={'size':10})
+
+    # Put legend1 back
+    ax1.add_artist(legend1)
+
+    return
+
+def plot_scale_radius_tage(itree):
+    """
+    check halo scale radius and disk scale radius
+    """
+    tree_redshift,root_mass,progenitors,mainbranch_mass = read_tree()
+
+    mhalo = mainbranch_mass[itree]
+
+    host = sga.Host(mhalo,tree_redshift,cosmology,fd=0.1,flattening=25.,disk_method='EMERGE',
+            walk_tree='forward',cooling_threshold=False,z0_smhm=False,smhm='m18')
+
+    rs_disk = host.scale_radius
+    rs_halo = [hhdp.rs for hhdp in host.halo_dens_profile]
+    conc = host.concentration
+    tage = host.t_age
+
+    ax1 = pl.subplot(111)
+
+    pl.plot(tage,rs_disk,c='k',label='disk')
+    pl.plot(tage,rs_halo,c='r',label='halo')
+    pl.ylabel('$r_{s}$',fontsize=15)
+    pl.legend(loc='upper left',frameon=False,prop={'size':10})
+    
+    ax2 = ax1.twinx()
+    pl.plot(tage,conc,c='b')
+    pl.ylabel('c',fontsize=15)
+
+    ax1.set_xlabel('age (Gyr)',fontsize=15)
+    
     return
 #########################################################
 ### debug

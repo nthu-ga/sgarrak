@@ -488,6 +488,9 @@ class Host():
 
             prev_disk_mass = starting_disk_mass
 
+            # Save the scale radius for checking
+            self.scale_radius = list()
+
             self.disk_mass = list()
             self.disk_reff = list()
             self.disk_dens_profile = list()
@@ -508,6 +511,7 @@ class Host():
 
                 Reff = gh.Reff(halo_profile.rh,conc_i) # Virial radius & concentration
                 scale_radius = 0.766421/(1.+1./flattening) * Reff
+                self.scale_radius.append(scale_radius)
                 scale_height = scale_radius / flattening
 
                 if disk_method=='interp':
