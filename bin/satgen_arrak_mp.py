@@ -136,7 +136,7 @@ def process_tree(itree ,fd=0.0 ,flattening=25.,
     # These should be set in the sgarrak.py module
     # SATGEN.cfg implicitly sets resolution limits on mass (absolute and relative) and radius
     # Set them explicitly here; these are the degaults
-    #cfg.Mres    = 100.0
+    #cfg.Mres    = None
     #cfg.Rres    = 0.001
     #cfg.psi_res = 1.0e-5
 
@@ -156,7 +156,7 @@ def process_tree(itree ,fd=0.0 ,flattening=25.,
     # Define result keys once
     result_keys = [
         'prog_masses', 'prog_mstars', 'status', 'radii', 'tsteps', 'tage',
-        'levels_at_tsteps', 'coors', 'has_galaxy'
+        'levels_at_tsteps', 'coors', 'has_galaxy','host_dp_steps'
     ]
 
     if host.has_disk:

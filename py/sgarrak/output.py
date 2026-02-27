@@ -37,6 +37,13 @@ if not PY_PATH in sys.path:
 import sgarrak as sga
 reload(sga)
     
+LUDLOW_C_PATH = '/data/chungwen/cwt/ludlowc/ludlowc/py/ludlowc'
+if not LUDLOW_C_PATH in sys.path:
+    sys.path.append(LUDLOW_C_PATH)
+
+import ludlowc as llc
+reload(llc)
+
 import numpy as np
 import os
 import time
@@ -463,6 +470,19 @@ def density_profile(data,method='first'):
     
 
     return
+
+def scale_radius_gao(m,z,h=0.73):
+    """
+    M in h^-1 M_sun
+    """
+    aexp = 1/(1+z)
+    M= m*h
+    lgM = np.log10(M)
+    la  = np.log10(aexp)
+    
+    A = -0.14*np.exp(-((la+0.05)/0.35)**2)
+    B = 2.646*np.exp(-((la+0.0)/0.5)**2)
+    return 0.1**(A*lgM+B)
 #########################################################
 ### Data arrangement
 def small_tickmarks(ax,minor_x,minor_y):
@@ -895,7 +915,7 @@ def plot_macc_mstream_function(progs,root_mass,task='m_acc'):
     weights = volume_weight(root_mass)
     bins=np.arange(5,13,0.2)
 
-    pl.figure(figsize=(22,10))
+    pl.figure(figsize=(12,5))
     pl.subplot(121)
     for (k,p),c in zip(progs.items(),cs):
         m_acc = compute_mass(p,root_mass,task='m_acc')
@@ -946,7 +966,7 @@ def plot_macc_mstream_function(progs,root_mass,task='m_acc'):
     pl.xlim(7,11.5)
     pl.title('$\mathrm{s<0.2}$',fontsize=20)
     pl.xlabel('$\log_{10}\,M_\mathrm{\star,acc}/M_{\odot}$',fontsize=20)
-    pl.ylabel('$\log_{10}\,dN/dM_\mathrm{\star,acc}$',fontsize=20)
+    #pl.ylabel('$\log_{10}\,dN/dM_\mathrm{\star,acc}$',fontsize=20)
     larger_ticks()
     
     return
@@ -1439,7 +1459,7 @@ def plot_conc_to_hm_smooth_zhao():
 
     return
 
-def plot_conc_and_rs_to_tage_smooth_zhao(itree,y1='c',y2='rs'):
+def plot_conc_and_rs_to_tage_smooth_zhao(itree):
     """
     """
 
@@ -1450,9 +1470,11 @@ def plot_conc_and_rs_to_tage_smooth_zhao(itree,y1='c',y2='rs'):
     # Concentration
     smooth_c = sga.smooth_c(mainbranch_mass[itree],tage,version='zhao')
     zhao_c   = sga.halo_mah_to_zhao_c_nfw(mainbranch_mass[itree],tage)
+    ludlow_c = llc.ludlow_concentration(mainbranch_mass[itree],tree_redshift,cosmology)
 
     lgsmooth_c = np.log10(smooth_c)
     lgzhao_c   = np.log10(zhao_c)
+    lgludlow_c = np.log10(ludlow_c)
 
     # Scale radius
     nlev = len(tree_redshift)
@@ -1464,50 +1486,68 @@ def plot_conc_and_rs_to_tage_smooth_zhao(itree,y1='c',y2='rs'):
 
     srs = []
     zrs = []
+    grs = []
+    lrs = []
+    srvir = []
+    zrvir = []
     for i in idx_iter:
 
         mass_i = mhalo[i]
         sc_i = smooth_c[i]
         zc_i = zhao_c[i]
+        lc_i = ludlow_c[i]
         z_i = tree_redshift[i]
 
         shalo_profile = NFW(mass_i,sc_i,Delta=200.,z=z_i,sf=1.)
         zhalo_profile = NFW(mass_i,zc_i,Delta=200.,z=z_i,sf=1.)
+        lhalo_profile = NFW(mass_i,lc_i,Delta=200.,z=z_i,sf=1.)
 
         srs.append(shalo_profile.rs)
         zrs.append(zhalo_profile.rs)
+        lrs.append(lhalo_profile.rs)
 
-    ax1 = pl.subplot(111)
+        # self.rhoc = co.rhoc(z,cfg.h,cfg.Om,cfg.OL)
+        # self.rhoh = self.Deltah * self.rhoc
+        # self.rh = (3.*self.Mh / (cfg.FourPi*self.rhoh))**(1./3.)
+        srvir.append(shalo_profile.rh)
+        zrvir.append(zhalo_profile.rh)
 
-    pl.plot(tage,lgsmooth_c,label='smooth',c='k')
-    pl.plot(tage,lgzhao_c,label='zhao',c='r')
+        if i<4:
+            print('Mhalo: ',mass_i)
+            print('M200: ',shalo_profile.M(shalo_profile.rh))
+
+        # The virial radius is the same
+        rs_gao = scale_radius_gao(mass_i,z_i) * shalo_profile.rh
+        grs.append(rs_gao)
+
+    # It says the mass can be M200 or Mvir depending on the model choice.
+    # But there is only one choice (DM14), also the difference between M200 and
+    # Mvir is small.
+    dmc = init.concentration(mhalo,tree_redshift)
+    lgdmc = np.log10(dmc)
+
+    pl.figure(figsize=(16,6))
+    pl.subplot(121)
+
+    pl.plot(tage,srs,c='k',label='smooth')
+    pl.plot(tage,zrs,c='r',label='Zhao')
+    pl.plot(tage,grs,c='green',label='Gao')
+    pl.plot(tage,lrs,c='blue',label='Ludlow')
+
+    pl.xlabel('age (Gyr)',fontsize=15)
+    pl.ylabel('$\mathrm{r_{s} \, (kpc)}$',fontsize=15)
+    pl.legend(loc='upper left',frameon=False,prop={'size':10})
+
+    pl.subplot(122)
+
+    pl.plot(tage,lgsmooth_c,c='k',label='smooth')
+    pl.plot(tage,lgzhao_c,c='r',label='Zhao')
+    pl.plot(tage,lgdmc,c='purple',label='DM14')
+
+    pl.xlabel('age (Gyr)',fontsize=15)
     pl.ylabel('$\mathrm{log_{10}\, c}$',fontsize=15)
-    legend1 = pl.legend(loc='upper left',frameon=False,prop={'size':10})
 
-    ax2 = ax1.twinx()
-
-    if y2=='rs':
-        pl.plot(tage,srs,c='k',ls='--')
-        pl.plot(tage,zrs,c='r',ls='--')
-        pl.ylabel('$\mathrm{r_{s} \, (kpc)}$',fontsize=15)
-
-        labels = ['concentration','scale radius']
-    elif y2=='hm':
-        pl.plot(tage,lgmhalo,c='k',ls='--')
-        pl.plot(tage,lgmhalo,c='r',ls='--')
-        pl.ylabel('$\mathrm{log_{10} \, halo\, mass(M_{\odot})}$',fontsize=15)
-
-        labels = ['concentration','halo mass']
-
-    ax1.set_xlabel('age (Gyr)',fontsize=15)
-
-    l1 = pl.Line2D([0,0],[0,0],ls='solid',c='k')
-    l2 = pl.Line2D([0,0],[0,0],ls='dashed',c='k')
-    handles = [l1,l2]
-    legend2 = pl.legend(handles,labels,loc='lower right',frameon=False,prop={'size':10})
-
-    # Put legend1 back
-    ax1.add_artist(legend1)
+    pl.legend(loc='lower right',frameon=False,prop={'size':10})
 
     return
 
