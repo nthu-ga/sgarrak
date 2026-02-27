@@ -11,3 +11,5 @@ notebooks/ics_example/trees/pchtrees
 bin/copy_satgen_arrak_mp.py
 runs
 .nfs*
+*.txt
+*.pdf
