@@ -93,14 +93,13 @@ if not LUDLOW_C_PATH in sys.path:
     sys.path.append(LUDLOW_C_PATH)
 
 import ludlowc as llc
-reload(llc)
 
 SRC_PATH = '/data/chungwen/sgarrak'
 if not SRC_PATH in sys.path:
     sys.path.append(SRC_PATH)
 
 import src.strip as strip
-reload(strip)
+
 ############################################################
 def read_hdf5(path,datasets,group='/'):
     """
@@ -129,7 +128,7 @@ def is_iterable(x):
     return False
 
 ############################################################
-def mod_Mstar(hm,h=0.7,z=0.,choice='m18',task='Mstar',**kwargs):
+def mod_Mstar(hm,h=0.7,z=0.,model='m18',task='Mstar',**kwargs):
     """
     Customized Mstar 
     The halo mass from our eps tree already dealt with h
@@ -153,7 +152,7 @@ def mod_Mstar(hm,h=0.7,z=0.,choice='m18',task='Mstar',**kwargs):
 
     """
 
-    if choice=='B13':
+    if model == 'B13':
         h_model = 0.7
         hm *= (h/h_model)
         if task=='Mstar':
@@ -163,7 +162,7 @@ def mod_Mstar(hm,h=0.7,z=0.,choice='m18',task='Mstar',**kwargs):
         else:
             raise ValueError(f"Invalid task '{task}' for choice 'B13'")
         
-    elif choice=='RP17':
+    elif model == 'RP17':
         h_model = 0.7 # Not used, needs to check
         hm *= (h/h_model)
         if task=='Mstar':
@@ -173,17 +172,18 @@ def mod_Mstar(hm,h=0.7,z=0.,choice='m18',task='Mstar',**kwargs):
         else:
             raise ValueError(f"Invalid task '{task}' for choice 'RP17'")
 
-    elif choice=='B19':
+    elif model == 'B19':
         h_model = 0.678
         hm *= (h/h_model)
-        raise NotImplementedError('B19: Not provide now')
+        raise NotImplementedError('B19: Not provided yet')
 
-    elif choice=='m18':
+    elif model == 'm18':
         h_model = 0.678
         fb = 0.156 # cfg.Ob/cfg.Om
-        e,sigma = integrate_b_conversion(z,hm,h=h_model)
+        e,sigma = integrated_baryon_conversion_eff(z,hm,h=h_model)
         # Should it have a lower limit of hm*fb?
         sm = np.minimum(fb*hm,10**(np.random.normal(np.log10(fb*hm*e),sigma)))
+
     sm *= (h_model/h)
     return sm 
 
@@ -226,6 +226,7 @@ def mstar(delta_t,z,
     delta_mstar = delta_t * (mstar_dot * (1 - f_loss)) # eq.11
     return delta_mstar
 
+############################################################
 def sfr(M_dot_dyn,Rv_dot_dyn,e,dens_profile,z):
     """
     The halo mass growth due to accretions is the accreted masses - pseudo evolution of
@@ -278,7 +279,8 @@ def sfr(M_dot_dyn,Rv_dot_dyn,e,dens_profile,z):
     mstar_dot = mb_dot * e # eq.1
     return mstar_dot
 
-def inst_b_conversion(M,z,h=0.7):
+############################################################
+def instant_baryon_conversion_eff(M,z,h=0.7):
     """
     Instantaneous baryon conversion efficiency e
     
@@ -307,6 +309,7 @@ def inst_b_conversion(M,z,h=0.7):
     M1 = 10**lgM1
     return 2 * en / ((M/M1)**-beta + (M/M1)**gamma) # eq.5
 
+############################################################
 def calculate_tdyn(age,mass,conc,zred,h=0.7,return_lgmass=False):
     """
 
@@ -354,13 +357,14 @@ def calculate_tdyn(age,mass,conc,zred,h=0.7,return_lgmass=False):
 
     return m_dot_dyn,Rv_dot_dyn,tdyn_pf,tdyn_cal,Rv
 
-## EMERGE SMHM relation
-def integrate_b_conversion(zred,mass,h=0.7):
+############################################################
+def integrated_baryon_conversion_eff(zred,mass,h=0.7):
     """
-    Integrated beryon conversion efficiency in Moster18
+    Integrated baryon conversion efficiency in Moster18, for computing the
+    EMERGE SMHM relation.
 
-    Parameters: zred: redshift. scaler
-                mass: halo mass. array or scaler
+    Parameters: zred: redshift. scalar
+                mass: halo mass. array or scalar
     """
 
     # coefficients, table 8 all centrals
@@ -643,7 +647,7 @@ class Host():
                         disk_mass = mod_Mstar(mass_i,h=0.73,z=z_i,choice=smhm)
                         self.disk_mass.append(disk_mass)
                     else:
-                        e = inst_b_conversion(mass_i,z_i)
+                        e = instant_baryon_conversion_eff(mass_i,z_i)
                         t = self.t_age[i]
                         delta_t = t - self.t_age[i+1]
                         delta_disk_mass = mstar(delta_t,z_i,
@@ -708,8 +712,12 @@ def Tvir_threshold_rez10fit():
 
     return fit_hi,fit_low
 
+############################################################
 def threshold_check(hm,z):
     """
+    Returns True if the halo mass hm is above the threshold for atomic hydrogen
+    cooling at the redshift z.
+
     The cooling threshold check is only taken at before mergers.
     
     Parameters: hm: linear progenitor halo mass before the merger
@@ -720,8 +728,7 @@ def threshold_check(hm,z):
     else:
         threshold,_ = Tvir_threshold_rez10fit()
     
-    return np.log10(hm)>threshold(z)
-    
+    return np.log10(hm) > threshold(z)
 
 ############################################################
 class Progenitor():
@@ -906,6 +913,7 @@ def smooth_c(Mv,t,version='zhao'):
         coeff2 = 8.4
     idx = aux.FindNearestIndex(Mv,0.04*Mv[0])
     return 4.*(1.+(t/(coeff1*t[idx]))**coeff2)**0.125
+
 ############################################################
 def cyl_to_cart_position(xv):
     """
@@ -923,8 +931,7 @@ def cyl_to_cart_position(xv):
     Y = R*np.sin(phi)
     return np.array([X,Y,Z])
 
-import numpy as np
-
+############################################################
 def cylindrical_to_cartesian_phase(R, phi, z, VR, Vphi, Vz):
     """
     Convert 6D cylindrical (R,phi,z,VR,Vphi,Vz)
@@ -958,6 +965,7 @@ def cylindrical_to_cartesian_phase(R, phi, z, VR, Vphi, Vz):
 
     return x, y, z, vx, vy, vz
 
+############################################################
 def valid_coors(coors):
     """
     This function filters [-1,-1,-1] in the coordinate array.
@@ -970,6 +978,7 @@ def valid_coors(coors):
     coors_valid = coors[mask]
 
     return coors_valid
+
 ############################################################
 def reshape_to_tsteps_shape(input_array, t_shape, task='coor'):
     """
@@ -1033,6 +1042,7 @@ def reshape_to_tsteps_shape(input_array, t_shape, task='coor'):
     pad_block = np.full((below_res_steps, ndim), -1, dtype=arr.dtype)
 
     return np.vstack([arr, pad_block])
+
 ############################################################
 def evolve_orbit(host, prog ,tsteps=None, 
                  evolve_prog_mass=False, 
@@ -1178,10 +1188,6 @@ def evolve_orbit(host, prog ,tsteps=None,
 
         # Evolve the progenitor orbit based on the current mass
         # and host halo profile.
-<<<<<<< HEAD
-
-=======
->>>>>>> main
         o.integrate(t, host_dp, prog_mass)
         
         # Note that the coordinates are updated 
@@ -1189,30 +1195,25 @@ def evolve_orbit(host, prog ,tsteps=None,
         # the ".integrate" method, here we assign them to 
         # a new variable "xv" only for bookkeeping
         xv  = o.xv 
-<<<<<<< HEAD
-        prog_coors.append(cyl_to_cart_position(xv))
+        
+        prog_xv.append(xv)
+        prog_coors.append(compute_coordinates(xv))
         r   = np.sqrt(xv[0]**2+xv[2]**2)
         radii.append(r)
 
+        # Compute circularity
         # FIXME possible consitency issues here
         # - computing before mass update, ok?
         # - dp includes disk or not?
         j_tot  = xv_to_j_tot(xv,mass=prog_mass)
         j_circ = profile_j_circ(host_dp, r, mass=prog_mass)
         prog_circularity.append(j_tot/j_circ)
-        
-=======
-        prog_xv.append(xv)
-        prog_coors.append(compute_coordinates(xv))
-        r   = np.sqrt(xv[0]**2+xv[2]**2)
-        radii.append(r)
-
+ 
         # Save the accelerations
         # There are two types of acceleration-ish functions...
         acceleration_phi.append(host_dp.Phi(xv[0],xv[2]))
         acceleration_fgrav.append(host_dp.fgrav(xv[0],xv[2]))
 
->>>>>>> main
         if evolve_prog_mass:
             # Evolve the progenitor mass for dt in the current potential
             # Following SatGen (SatEvo), msub takes the initial potentials
@@ -1317,11 +1318,8 @@ def evolve_orbit(host, prog ,tsteps=None,
     # Note that the orbit xvArray property contains the phase space coordinate at each 
     # timestep, but, since this this computed by SatGen internally, it does not include
     # the initial conditions or any steps below the resolution limit. TODO?
-<<<<<<< HEAD
-    retdict['orbit'] = np.array(prog_coors)
     
-=======
-    retdict['coors'] = prog_coors
+    retdict['orbit'] = np.array(prog_coors)
     retdict['acc_phi'] = acceleration_phi
     retdict['acc_fgrav'] = acceleration_fgrav
 
@@ -1329,9 +1327,5 @@ def evolve_orbit(host, prog ,tsteps=None,
         retdict['strip_star'] = strip_star_list
         retdict['strip_halo'] = strip_halo_list
         retdict['strip_tage'] = strip_tage_list
->>>>>>> main
+    
     return retdict
-
-
-
-
