@@ -138,7 +138,7 @@ def avg_smhm(n,return_edge=False):
 ############################################################
 class Host():
     def __init__(self, mass, zred, cosmology, fd=0.0, flattening=0., disk_method='fd',
-                 output_zred=None, walk_tree='backward'):
+                 output_zred=None, walk_tree='backward', static_halo=False):
         """
         
         Parameters: fd: disk mass fraction
@@ -153,6 +153,7 @@ class Host():
         Note: When assigning a disk_method, fd needs to give a number other than 0.
         """
         self.cosmology = cosmology
+
         self.evolving_mass = is_iterable(mass)
 
         # The corresponding pairs of mass and zred are usually taken from
@@ -162,7 +163,7 @@ class Host():
             assert(len(mass) > 1)
             assert(len(zred) == len(mass))
         else:
-            assert(not is_iterable(zred))
+            mass = np.repeat(mass, len(zred))
             assert(output_zred is None)
             
         self._tree_mass = np.atleast_1d(mass)
@@ -431,6 +432,9 @@ class Progenitor():
                  cosmology=None, zred=None, level=None, mstar=None,
                  orbit_init_method='li2020', xc=None, eps=None):
         """
+        orbit_init_method: one of the following:
+            - None: use xc,eps method
+            - 'li2020': draw from a distribution per Li et al. 2020
         zred_or_level:
         """
         self.mass_init = mass
@@ -525,7 +529,52 @@ class Progenitor():
             raise Exception
 
         self.r_init = np.sqrt(self.xv[0]**2+self.xv[2]**2)
+
+        # J/J_circ
+        # APC: I have checked this gives j/j_circ consistent with the xc,eps input.
+        self.j_tot_init = xv_to_j_tot(self.xv,self.mass_init)
+
+        # A.M. of a circular orbit
+        self.j_circ_tot_init = profile_j_circ(self.init_host_halo_dens_profile,
+                self.init_host_halo_dens_profile.rh,
+                mass=self.mass_init)
+
+        self.circularity_init = self.j_tot_init/self.j_circ_tot_init
         return
+
+############################################################
+def profile_j_circ(dens_prof, r, mass=1):
+    """
+    Finds j_circ at a given radius in the SatGen potential
+    supplied.
+    """
+    # Unit of r is kpc
+    # Unit of v is kpc/Gyr (satgen internal unit)
+    v_circ = dens_prof.Vcirc(r)
+    return mass*r*v_circ
+
+ 
+############################################################
+def xv_to_j_tot(xv,mass=1):
+    """
+    Return the total angular momentum.
+
+    We should really just compute the angular momentum in cyl. coords.
+    For now we convert to cartesian coords and take the regular cross product.
+    """
+    # Unit of r is kpc
+    # Unit of v is kpc/Gyr (satgen internal unit)
+    # Phi is in radians
+    R, phi, z    = xv[0], xv[1], xv[2]
+    x, y         = R*np.cos(phi), R*np.sin(phi)
+    vR, vphi, vz = xv[3], xv[4], xv[5]
+    vx, vy       = vR*np.cos(phi) - vphi*np.sin(phi), vR*np.sin(phi) + vphi*np.cos(phi)
+
+    r_cart = np.array([x,y,z])
+    v_cart = np.array([vx,vy,vz])
+    j = mass*np.cross(v_cart, r_cart)
+    j_tot = np.sqrt(np.sum(j**2, dtype=np.float64))
+    return j_tot
 
 ############################################################
 def halo_mah_to_zhao_c_nfw(mass, t_age_gyr):
@@ -540,9 +589,10 @@ def halo_mah_to_zhao_c_nfw(mass, t_age_gyr):
     return np.array(h_c_nfw)
 
 ############################################################
-def compute_coordinates(xv):
+def cyl_to_cart_position(xv):
     """
-    Compute the 3D space phase xv [R,phi,z,VR,Vphi,Vz] to coordinates
+    Convert the 3D space phase xv [R,phi,z,VR,Vphi,Vz] to Cartesian
+    coordinates (configuration space only).
     
     The orbit object is used to calculate the orbital evolution,
     so the length of the array is tsteps-1 because there is no
@@ -592,8 +642,9 @@ def evolve_orbit(host, prog ,tsteps=None,
     prog_masses = [prog.mass_init]
     prog_mstars = [prog.mstar_init]
     prog_status = [STATUS_PROG_INTACT]
-    prog_coors  = [compute_coordinates(prog.xv)]    
-    
+    prog_coors  = [cyl_to_cart_position(prog.xv)]    
+    prog_circularity = [prog.circularity_init]
+
     has_galaxy  = [prog.has_galaxy]
 
     if host.has_disk:
@@ -623,7 +674,12 @@ def evolve_orbit(host, prog ,tsteps=None,
     xv     = o.xv 
     r      = np.sqrt(xv[0]**2+xv[2]**2)    
     r_init = r
-    
+
+    j_tot  = xv_to_j_tot(xv,prog_mass)
+    j_circ = profile_j_circ(host_dp, r, mass=prog_mass)
+    j_tot_init = j_tot
+    j_circ_init = j_circ
+
     initial_level = prog.level
     
     # istep = 1 corresponds to evolution from the initial conditions up to the end of the first step 
@@ -674,6 +730,7 @@ def evolve_orbit(host, prog ,tsteps=None,
             prog_status.append(STATUS_PROG_LOST)
             if not evolve_past_res_limits:
                 radii.append(r)
+                prog_circularity.append(j_tot/j_circ)
                 prog_masses.append(prog_mass)
                 prog_mstars.append(prog_mstar)
                 if host.has_disk:
@@ -690,7 +747,7 @@ def evolve_orbit(host, prog ,tsteps=None,
 
         # Evolve the progenitor orbit based on the current mass
         # and host halo profile.
-        
+
         o.integrate(t, host_dp, prog_mass)
         
         # Note that the coordinates are updated 
@@ -698,10 +755,17 @@ def evolve_orbit(host, prog ,tsteps=None,
         # the ".integrate" method, here we assign them to 
         # a new variable "xv" only for bookkeeping
         xv  = o.xv 
-        prog_coors.append(compute_coordinates(xv))
+        prog_coors.append(cyl_to_cart_position(xv))
         r   = np.sqrt(xv[0]**2+xv[2]**2)
         radii.append(r)
 
+        # FIXME possible consitency issues here
+        # - computing before mass update, ok?
+        # - dp includes disk or not?
+        j_tot  = xv_to_j_tot(xv,mass=prog_mass)
+        j_circ = profile_j_circ(host_dp, r, mass=prog_mass)
+        prog_circularity.append(j_tot/j_circ)
+        
         if evolve_prog_mass:
             # Evolve the progenitor mass for dt in the current potential
             # Following SatGen (SatEvo), msub takes the initial potentials
@@ -768,6 +832,7 @@ def evolve_orbit(host, prog ,tsteps=None,
     if host.has_disk:
         retdict['host_disk_masses'] = np.array(host_disk_masses)
     retdict['radii']       = np.array(radii)
+    retdict['circularity'] = np.array(prog_circularity)
     retdict['tsteps']      = tsteps
     retdict['tage']        = host.t_age[initial_level] + tsteps
     retdict['prog_dp']     = prog_dp
@@ -778,6 +843,6 @@ def evolve_orbit(host, prog ,tsteps=None,
     # Note that the orbit xvArray property contains the phase space coordinate at each 
     # timestep, but, since this this computed by SatGen internally, it does not include
     # the initial conditions or any steps below the resolution limit. TODO?
-    retdict['coors'] = np.array(prog_coors)
+    retdict['orbit'] = np.array(prog_coors)
     
     return retdict
