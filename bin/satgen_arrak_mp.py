@@ -12,7 +12,7 @@ from astropy.table import Table
 
 import copy
 
-sys.path.append(os.path.abspath('../py'))
+sys.path.append(os.path.abspath('/data/chungwen/sgarrak/py'))
 import sgarrak.sgarrak as sga
 import argparse
 import h5py
@@ -28,6 +28,9 @@ matplotlib.rcParams['font.family'] = 'serif'
 ###########################################################
 def write_results(results, tree_data, params, output_times, filename,reorder=None):
     """
+
+    Note: The main_branch_disk_mass is the disk mass along the main branch history.
+          The host_disk_mass is the disk mass a progenitor feels at each tstep.
     """
     ntrees    = len(results)
     data_keys = results[0].keys()
@@ -49,11 +52,16 @@ def write_results(results, tree_data, params, output_times, filename,reorder=Non
 
     total_nprog = len(total_results['tree_idx'])
 
-    tree_array_2d_properties = [
-            'main_branch_halo_mass', 
-            'main_branch_halo_c',
-            'main_branch_disk_mass', 
-            'main_branch_disk_reff']
+    if 'main_branch_disk_mass' in tree_data[0].keys():
+        tree_array_2d_properties = [
+                'main_branch_halo_mass', 
+                'main_branch_halo_c',
+                'main_branch_disk_mass', 
+                'main_branch_disk_reff']
+    else:
+        tree_array_2d_properties = [
+                'main_branch_halo_mass',
+                'main_branch_halo_c']
 
     sort_order = reorder if reorder is not None else None
 
@@ -107,6 +115,8 @@ def write_results(results, tree_data, params, output_times, filename,reorder=Non
 def process_tree(itree ,fd=0.0 ,flattening=25.,
                  disk_method='fd',
                  walk_tree='backward',
+                 smhm='m18',
+                 mstar_shift=None,
                  output_zred=None,
                  progenitors=None,
                  tree_main_branch_masses=None,
@@ -114,7 +124,10 @@ def process_tree(itree ,fd=0.0 ,flattening=25.,
                  cosmology=None,
                  nprogs_max=None,
                  n_substeps=None,
-                 verbose=False):
+                 verbose=False,
+                 cooling_threshold=True,
+                 z0_smhm=False,
+                 orbit_init_method='li2020'):
     """
     """
     #sleep(3)
@@ -123,7 +136,7 @@ def process_tree(itree ,fd=0.0 ,flattening=25.,
     # These should be set in the sgarrak.py module
     # SATGEN.cfg implicitly sets resolution limits on mass (absolute and relative) and radius
     # Set them explicitly here; these are the degaults
-    #cfg.Mres    = 100.0
+    #cfg.Mres    = None
     #cfg.Rres    = 0.001
     #cfg.psi_res = 1.0e-5
 
@@ -133,16 +146,17 @@ def process_tree(itree ,fd=0.0 ,flattening=25.,
     progs_this_tree   = np.flatnonzero(progenitors['TreeID'] == itree)
     nprogs_this_tree  = len(progs_this_tree)
     host_mass_history = tree_main_branch_masses[itree]
-    
+    if nprogs_max is None:
+        nprogs_max = nprogs_this_tree
     # Call the host object
     host = sga.Host(host_mass_history, tree_redshifts, cosmology,
                     fd=fd, flattening=flattening, output_zred=output_zred,
-                    disk_method=disk_method,walk_tree=walk_tree)
-
+                    disk_method=disk_method,walk_tree=walk_tree,
+                    cooling_threshold=cooling_threshold,z0_smhm=z0_smhm,smhm=smhm)
     # Define result keys once
     result_keys = [
         'prog_masses', 'prog_mstars', 'status', 'radii', 'tsteps', 'tage',
-        'levels_at_tsteps', 'coors', 'has_galaxy'
+        'levels_at_tsteps', 'coors', 'has_galaxy','host_dp_steps'
     ]
 
     if host.has_disk:
@@ -151,8 +165,6 @@ def process_tree(itree ,fd=0.0 ,flattening=25.,
     # Initialize results dict with empty lists
     results = {key: [] for key in result_keys}
     
-    if nprogs_max is None:
-        nprogs_max = nprogs_this_tree
     
     for iprog in range(0,nprogs_max): 
         start_time = time.perf_counter()
@@ -160,7 +172,8 @@ def process_tree(itree ,fd=0.0 ,flattening=25.,
         prog_mass = progenitors['ProgenitorMass'][progs_this_tree][iprog]
         prog_ilev = progenitors['ProgenitorIlev'][progs_this_tree][iprog]
         # Call the progenitor object
-        prog = sga.Progenitor(prog_mass, host, level=prog_ilev)
+        prog = sga.Progenitor(prog_mass, host, level=prog_ilev, mstar_shift=mstar_shift,smhm=smhm,
+                              orbit_init_method=orbit_init_method)
         
         # Define a time step to evolve
         total_time_gyr = prog.infall_t_lbk
@@ -202,11 +215,16 @@ def parse_args():
     parser.add_argument("--flattening",help="disk scale length/scale height",default=25.,type=float)
     parser.add_argument("--disk_method",help="fd, no, interp_sm, interp, step, interp_zavg",default="fd", type=str)
     parser.add_argument("--walk_tree",help="backward or forward",default="backward", type=str)
-    parser.add_argument("--output","-o", help="Output filename", default='test_all_progenitors.hdf5')
+    parser.add_argument("--mstar_shift","-msh",help="+-50 percent or so",default=None,type=float)
+    parser.add_argument("--output","-o", help="Output filename", default="test_all_progenitors.hdf5")
     parser.add_argument("--nprogs", help="Only process a fixed number of progenitors per tree", default=None, type=int)
     parser.add_argument("--ntrees", help="Only process a fixed number of trees", default=None, type=int)
-    parser.add_argument("--hubble","-H", help="H0 hubble constant", default=0.73,type=float)
+    parser.add_argument("--hubble","-H", help="H0 hubble constant", default=0.7,type=float)
     parser.add_argument("--serial", help="Execute in serial, no multithreading",action="store_true")
+    parser.add_argument("--z0_smhm", help="Whether uses z0 smhm relation for disk masses",default=False)
+    parser.add_argument("--cooling_threshold", help="Whether turns on a cooling threshold check for disk growth",default=True)
+    parser.add_argument("--smhm", help="stellar mass halo mass relation",default="m18")
+    parser.add_argument("--orbit_init_method", help="orbit initial method for progenitors",default='li2020')
     return parser.parse_args()
 
 ###########################################################
@@ -261,12 +279,17 @@ if __name__ == '__main__':
                                    flattening = args.flattening,
                                    disk_method = args.disk_method,
                                    walk_tree = args.walk_tree,
+                                   mstar_shift = args.mstar_shift,
+                                   smhm = args.smhm,
+                                   orbit_init_method = args.orbit_init_method,
                                    n_substeps = args.substeps,
                                    progenitors=progenitors,
                                    tree_main_branch_masses=tree_main_branch_masses,
                                    tree_redshifts=tree_redshifts,
                                    cosmology=cosmology,
                                    nprogs_max=args.nprogs,
+                                   cooling_threshold=args.cooling_threshold,
+                                   z0_smhm=args.z0_smhm,
                                    verbose=True)    
  
     print('Processing...')
@@ -306,7 +329,6 @@ if __name__ == '__main__':
                 results.append(results_this_tree)
                 tree_data.append(tree_data_this_tree)
                 tree_order.append(itree)
-
     t_end = time.perf_counter()
     print('Total processing time {:f}s'.format(t_end-t_start))
     print('             Per tree {:f}s'.format((t_end-t_start)/ntrees_max))

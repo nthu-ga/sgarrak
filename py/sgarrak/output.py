@@ -20,6 +20,7 @@
 #########################################################
 ### envs
 import sys
+from importlib import reload
 
 SATGEN_PATH = '/data/chungwen/SatGen'
 if not SATGEN_PATH in sys.path:
@@ -28,7 +29,21 @@ if not SATGEN_PATH in sys.path:
 SATGEN_ETC_PATH = '/data/chungwen/SatGen/etc'
 if not SATGEN_ETC_PATH in sys.path:
     sys.path.append(SATGEN_ETC_PATH)
+
+PY_PATH = '/data/chungwen/sgarrak/py/sgarrak'
+if not PY_PATH in sys.path:
+    sys.path.append(PY_PATH)
+
+import sgarrak as sga
+reload(sga)
     
+LUDLOW_C_PATH = '/data/chungwen/cwt/ludlowc/ludlowc/py/ludlowc'
+if not LUDLOW_C_PATH in sys.path:
+    sys.path.append(LUDLOW_C_PATH)
+
+import ludlowc as llc
+reload(llc)
+
 import numpy as np
 import os
 import time
@@ -41,6 +56,7 @@ import astropy.cosmology as cosmo
 from astropy.table import Table
 from functools import partial
 import tables as tb
+from scipy.interpolate import interp1d
 
 # <<< for clean on-screen prints, use with caution, make sure that 
 # the warning is not prevalent or essential for the result
@@ -89,7 +105,7 @@ def read_b18():
 
     return b18smhm, b18smhm_scatter
 
-def read_tree():
+def read_tree(tree_setup='default'):
     """
     pchtrees output files
     """
@@ -99,8 +115,14 @@ def read_tree():
     OMEGA_B = 0.04455
 
     cosmology = cosmo.FlatLambdaCDM(hubble_parameter*100,0.25)
-    tree_file = '/data/chungwen/sgarrak/pchtrees/runs/1000_mixed_logmass/output_satgen_1000_mixed_logmass.hdf5'
-
+    if tree_setup=='default':
+        tree_file = '/data/chungwen/sgarrak/pchtrees/runs/1000_mixed_logmass/output_satgen_1000_mixed_logmass.hdf5'
+    elif tree_setup=='extend':
+        tree_file = '/data/chungwen/sgarrak/pchtrees/runs/1000_mixed_logmass/debug_extend_mass_range_run/output_satgen_1000_mixed_logmass.hdf5'
+    elif tree_setup=='lower':
+        tree_file = '/data/chungwen/sgarrak/pchtrees/runs/1000_mixed_logmass/debug_lower_mass_range_run/output_satgen_1000_mixed_logmass.hdf5'
+    else:
+        ValueError(f"Invalid tree file '{tree_setup}'")
     tree_main_branch_masses = read_hdf5(tree_file,'/Mainbranch/MainbranchMass')
     tree_main_branch_masses = tree_main_branch_masses/hubble_parameter
 
@@ -118,10 +140,10 @@ def read_tree():
 
     root_mass = tree_main_branch_masses[:,0]
 
-    return tree_redshifts,root_mass,progenitors
+    return tree_redshifts,root_mass,progenitors,tree_main_branch_masses
 
 
-def read_satgen(ver=1):
+def read_satgen(ver=3):
     """
     Satgen output files
 
@@ -130,12 +152,20 @@ def read_satgen(ver=1):
                interpdisk: Use the z=0 B13 SMHM relation to get the disk mass,
                            and rescale to the earlier halo mass
     
+    ver: lessoutput: Contains only initial and final outputs
+         ver2: 
+         ver3: Adds main branch infomation
+
+    Notes: host_disk_mass arrays not fixed in ver2 and ver3. 
+           The disk masses of hosts are recorded in MainBranches instead.
+
     TODO: Is there an way to control which file will load first 
           when using os.listdir or glob.glob?
     """
 
     dir_path = '/data/chungwen/sgarrak/runs/1000_mixed_logmass/'
     data = dict()
+    main = dict()
     if ver==0:
         data_path = dir_path+'lessoutput/'
         
@@ -147,10 +177,10 @@ def read_satgen(ver=1):
             data[odn] = read_hdf5(data_path+'prog_evo_1000_mixed_logmass_{}_lessoutput.hdf5'.format(odn),
                                   satgen_dataset_names,group='/Progenitors')
     
-    if ver==1:
+    elif ver==0:
         data_path = dir_path+'reionoutput/'
 
-        output_dataset_names = ['fd01','no','step']#,'interp_sm','interp']
+        output_dataset_names = ['fd01','no','step_forward','step_backward']#,'interp_sm','interp']
         satgen_dataset_names = ['orbit','has_galaxy','itree','levels_at_tsteps','nprog',
                                 'prog_masses','prog_mstars','radii','circularity','status','t_proc','tage',
                                 'tree_idx','tsteps']
@@ -160,8 +190,91 @@ def read_satgen(ver=1):
             data[odn] = read_hdf5(data_path+'prog_evo_1000_mixed_logmass_{}_disk.hdf5'.format(odn),
                                   satgen_dataset_names,group='/Progenitors')
 
+    elif ver==1:
+        data_path = dir_path+'reionoutput/evolve/'
 
-    return data    
+        output_dataset_names = ['fd01','no','step_forward','step_forward_shift15','step_forward_shift05']#,'interp_sm','interp']
+        satgen_dataset_names = ['coors','has_galaxy','itree','levels_at_tsteps','nprog',
+                                'prog_masses','prog_mstars','radii','status','t_proc','tage',
+                                'tree_idx','tsteps']
+
+        for odn in output_dataset_names:
+            print('Building data: ',odn)
+            data[odn] = read_hdf5(data_path+'prog_evo_1000_mixed_logmass_{}_disk.hdf5'.format(odn),
+                                  satgen_dataset_names,group='/Progenitors')
+
+    elif ver==2:
+        data_path = dir_path+'reionoutput/evolve_ver2/'
+
+        output_dataset_names = ['no','fd01','step_backward','step_forward','step_forward_threshold_off','step_forward_threshold_off_z0smhm_on']
+        prog_dataset_names = ['coors','has_galaxy','itree','levels_at_tsteps','nprog',
+                                'prog_masses','prog_mstars','radii','status','t_proc','tage',
+                                'tree_idx','tsteps']
+        main_dataset_names = ['main_branch_disk_mass']
+        for odn in output_dataset_names:
+            print('Building data: ',odn)
+            data[odn] = read_hdf5(data_path+'prog_evo_1000_mixed_logmass_{}_disk.hdf5'.format(odn),
+                                  prog_dataset_names,group='/Progenitors')
+            if odn != 'no':
+                main[odn] = read_hdf5(data_path+'prog_evo_1000_mixed_logmass_{}_disk.hdf5'.format(odn),
+                                      main_dataset_names,group='/MainBranches')
+
+    # This version uses smooth concentration
+    elif ver==3:
+        data_path = dir_path+'reionoutput/evolve_ver3/smooth_concentration/'
+
+        output_dataset_names = ['emerge']
+        prog_dataset_names = ['coors','has_galaxy','itree','levels_at_tsteps','nprog',
+                                'prog_masses','prog_mstars','radii','status','t_proc','tage',
+                                'tree_idx','tsteps']
+        main_dataset_names = ['main_branch_halo_mass','main_branch_halo_c','main_branch_disk_mass','main_branch_disk_reff']
+
+        for odn in output_dataset_names:
+            data[odn] = read_hdf5(data_path+'prog_evo_1000_mixed_logmass_EMERGE_disk.hdf5',prog_dataset_names,group='/Progenitors')
+            if odn != 'no':
+                main[odn] = read_hdf5(data_path+'prog_evo_1000_mixed_logmass_EMERGE_disk.hdf5',main_dataset_names,group='/MainBranches')
+
+    # This version uses zhao concentration
+    elif ver==301:
+
+        data_path = dir_path+'reionoutput/evolve_ver3/zhao_concentration/'
+        output_dataset_names = ['emerge']
+        prog_dataset_names = ['coors','has_galaxy','itree','levels_at_tsteps','nprog',
+                                'prog_masses','prog_mstars','radii','status','t_proc','tage',
+                                'tree_idx','tsteps']
+        main_dataset_names = ['main_branch_halo_mass','main_branch_halo_c','main_branch_disk_mass','main_branch_disk_reff']
+
+        for odn in output_dataset_names:
+            data[odn] = read_hdf5(data_path+'prog_evo_1000_mixed_logmass_EMERGE_disk.hdf5',prog_dataset_names,group='/Progenitors')
+            if odn != 'no':
+                main[odn] = read_hdf5(data_path+'prog_evo_1000_mixed_logmass_EMERGE_disk.hdf5',main_dataset_names,group='/MainBranches')
+
+    elif ver==-1:
+        data_path = dir_path
+
+        prog_dataset_names = ['levels_at_tsteps','host_disk_masses']
+        main_dataset_names = ['main_branch_disk_mass']
+
+        data = read_hdf5(data_path+'test.hdf5',prog_dataset_names,group='/Progenitors')
+        main = read_hdf5(data_path+'test.hdf5',main_dataset_names,group='/MainBranches')
+
+    elif ver==-2:
+        data_path = dir_path+'debug_lower_mass_range/'
+
+        output_dataset_names = ['emerge']
+        prog_dataset_names = ['coors','has_galaxy','itree','levels_at_tsteps','nprog',
+                                'prog_masses','prog_mstars','radii','status','t_proc','tage',
+                                'tree_idx','tsteps']
+        main_dataset_names = ['main_branch_halo_mass','main_branch_halo_c','main_branch_disk_mass','main_branch_disk_reff']
+
+        for odn in output_dataset_names:
+            data[odn] = read_hdf5(data_path+'prog_evo_1000_mixed_logmass_EMERGE_disk.hdf5',prog_dataset_names,group='/Progenitors')
+            if odn != 'no':
+                main[odn] = read_hdf5(data_path+'prog_evo_1000_mixed_logmass_EMERGE_disk.hdf5',main_dataset_names,group='/MainBranches')
+        
+    if ver in (2,3,301,-1,-2):
+        return data,main
+    return data   
 #########################################################
 ### Physics
 def moster_18_eff_func(m,M1=1,epsilon=0,beta=1,gamma=1):
@@ -277,6 +390,42 @@ def volume_weight(root_mass):
     
     return weights
 
+
+def avg_smhm(n,return_edge=False):
+    """
+    Averaged stellar masses given redshifts and halo masses.
+    By drawing N number of random samples with different z
+    for each halo mass.
+    
+    The halo mass range was chosen by min-cfg.mres max-max tree mass
+    
+    Note init.Mstar reads linear halo mass
+    
+    """
+    zrange  = np.arange(0,14,0.2)
+    Nz = np.random.choice(zrange,n)
+    h = 0.73
+
+    hmrange = 10**np.arange(9,12.7,0.2)/h
+
+    avgsm = []
+    maxsm = []
+    minsm = []
+
+    for hm in hmrange:
+        smlist = [sga.mod_Mstar(hm,z=z, choice='B13',task='Mstar') for z in Nz]
+        avgsm.append(np.median(smlist))
+        maxsm.append(max(smlist))
+        minsm.append(min(smlist))
+
+    f = interp1d(hmrange,avgsm)
+
+    if return_edge:
+        return np.array(maxsm),np.array(minsm),hmrange
+
+    return f
+
+
 # ChatGPT
 def first_pericenter_distance(r):
     """
@@ -321,6 +470,19 @@ def density_profile(data,method='first'):
     
 
     return
+
+def scale_radius_gao(m,z,h=0.73):
+    """
+    M in h^-1 M_sun
+    """
+    aexp = 1/(1+z)
+    M= m*h
+    lgM = np.log10(M)
+    la  = np.log10(aexp)
+    
+    A = -0.14*np.exp(-((la+0.05)/0.35)**2)
+    B = 2.646*np.exp(-((la+0.0)/0.5)**2)
+    return 0.1**(A*lgM+B)
 #########################################################
 ### Data arrangement
 def small_tickmarks(ax,minor_x,minor_y):
@@ -473,14 +635,40 @@ def plot_b18(ax,h=0.678,centrals=True,mean_only=False,
                         label='Behroozi+ (2019)')    
     return
 
-def plot_b18_satgen(ax):
+def plot_avgb13_satgen(ax):
     """
+    Repeat b13 init.Mstar relation 10000 times to get the range. 
     """
-    maxsm,minsm,hmrange = avg_smhm(300,return_edge=True)
+    maxsm,minsm,hmrange = avg_smhm(10000,return_edge=True)
 
     ax.fill_between(np.log10(hmrange),np.log10(maxsm),np.log10(minsm),
-                    alpha=0.5,label='B19')
+                    alpha=0.5,label='B13')
     
+    return
+
+def plot_b13_satgen(ax,sigma=1,color='grey',z0_smhm=False):
+    """
+    Similar to the above function but directly uses 0.2 scatter in log sm.
+
+    For each halo mass bins, it takes the highest and lowest value of hm(z) and 
+    add/minus 0.2.
+    """
+    h = 0.7
+    zrange = np.arange(0,14,0.2)
+    hmrange = 10**np.arange(8,12.7,0.2)/h
+    lghmrange = np.log10(hmrange)
+    smmax = []
+    smmin = []
+    for hmr in hmrange:
+        if z0_smhm:
+            sm = np.log10([sga.mod_Mstar(hmr,z=0,task='lgMs_B13') for zr in zrange])
+        else:
+            sm = np.log10([sga.mod_Mstar(hmr,z=zr,task='lgMs_B13') for zr in zrange])
+        smmax.append(max(sm)+0.2*sigma)
+        smmin.append(min(sm)-0.2*sigma)
+
+    ax.fill_between(lghmrange,smmax,smmin,alpha=0.5,facecolor=color,label='B13')
+    return
 
 
 def plot_m18(ax,h=0.6781,edges=False,omega_0=0.25,**kwargs):
@@ -704,7 +892,7 @@ def plot_macc_function(progs,root_mass,reionization=False):
 
     return
 
-def plot_macc_mstream_funtion(progs,root_mass,task='m_acc'):
+def plot_macc_mstream_function(progs,root_mass,task='m_acc'):
     """
     Volume weighted stellar stream mass function
 
@@ -727,7 +915,7 @@ def plot_macc_mstream_funtion(progs,root_mass,task='m_acc'):
     weights = volume_weight(root_mass)
     bins=np.arange(5,13,0.2)
 
-    pl.figure(figsize=(18,7))
+    pl.figure(figsize=(12,5))
     pl.subplot(121)
     for (k,p),c in zip(progs.items(),cs):
         m_acc = compute_mass(p,root_mass,task='m_acc')
@@ -778,7 +966,7 @@ def plot_macc_mstream_funtion(progs,root_mass,task='m_acc'):
     pl.xlim(7,11.5)
     pl.title('$\mathrm{s<0.2}$',fontsize=20)
     pl.xlabel('$\log_{10}\,M_\mathrm{\star,acc}/M_{\odot}$',fontsize=20)
-    pl.ylabel('$\log_{10}\,dN/dM_\mathrm{\star,acc}$',fontsize=20)
+    #pl.ylabel('$\log_{10}\,dN/dM_\mathrm{\star,acc}$',fontsize=20)
     larger_ticks()
     
     return
@@ -931,6 +1119,468 @@ def plot_orbits(prog_no,prog_disk,models,task='survive_with_disk',candidate=None
 
     return
 
+def plot_history(mains,models,halo_mass=False):
+    """
+    Check the mainbranch histories that have step jumps for the step_forward method
+    
+    Parameters: halo_mass: If true, plot the sm to z and it's hm to z.
+                           If false, plot the sm to z for the two different model.
+    """
+
+    z,_,_,hm = read_tree()
+    ztrees = np.tile(z,(1000,1)) 
+    colorsl = ['b','yellow']   
+    colorss = ['cyan','orange']
+
+    b13sm = np.array([gh.lgMs_B13(np.log10(hm_tree),z) for hm_tree in hm])
+    b13sm50 = np.percentile(b13sm,50,axis=0)
+    b13sm1sigma = np.percentile(b13sm,84.1,axis=0)
+    b13sm_err = b13sm1sigma-b13sm50
+
+    fig = pl.figure(figsize=(8,6))
+    
+    if halo_mass:
+        main = mains[0]
+        dm = main['main_branch_disk_mass']
+        lgdm50 = np.percentile(np.log10(dm),50,axis=0)
+        pl.plot(np.log10(1+ztrees).T,np.log10(dm).T,alpha=0.05,c=colorsl[0],zorder=1)
+        pl.scatter(np.log10(1+ztrees)[0].T,lgdm50.T,c=colorss[0],zorder=2)
+
+        lghm50 = np.percentile(np.log10(hm),50,axis=0)
+        pl.plot(np.log10(1+ztrees).T,np.log10(hm).T,alpha=0.05,c=colorsl[1],zorder=1)
+        pl.scatter(np.log10(1+ztrees)[0].T,lghm50.T,c=colorss[1],zorder=2)
+    else:
+        for main,model,colorl,colors in zip(mains,models,colorsl,colorss):
+            dm = main['main_branch_disk_mass']
+            lgdm50 = np.percentile(np.log10(dm),50,axis=0)
+            pl.plot(np.log10(1+ztrees).T,np.log10(dm).T,alpha=0.05,c=colorl,zorder=1)
+            pl.scatter(np.log10(1+ztrees)[0].T,lgdm50.T,c=colors,zorder=2)
+            #print(np.log10(mid_dm))
+
+    # Satgen built-in sm scatter is 0.2 in log
+    pl.errorbar(np.log10(1+z),b13sm50,yerr=b13sm_err,c='k',alpha=0.5) 
+    for zz in z:
+        pl.axvline(np.log10(1+zz),c='grey',alpha=0.2,lw=1,ls='--')
+    return
+
+def plot_history_smhm(mains,models):
+    """
+    """
+    _,_,_,hm = read_tree()
+    colorsl = ['b','yellow']
+    colorss = ['cyan','orange']
+
+    pl.figure(figsize=(8,6))
+
+    for main,model,colorl,colors in zip(mains,models,colorsl,colorss):
+        dm = main['main_branch_disk_mass']
+        pl.plot(np.log10(hm).T,np.log10(dm).T,alpha=0.05,c=colorl,zorder=2,label=model)
+
+    ax = pl.gca()
+    plot_b13_satgen(ax)
+
+    pl.xlabel('$\mathrm{\log_{10}\, halo \,mass\,(M_{\odot})}$',fontsize=15)
+    pl.ylabel('$\mathrm{\log_{10}\, stellar(disk) \,mass\,(M_{\odot})}$',fontsize=15)
+    pl.xlim(9,12.5)
+    pl.ylim(5,11.5)
+    pl.legend(frameon=False)
+    return
+
+#########################################################
+### check
+## This place check assumptions or models.
+
+def plot_fitting(age,mass,conc,zred):
+    """
+    A check for polyfit and interp1d on the mass and virial radius
+    """
+
+    halo_profile = NFW(mass,conc,Delta=200.,z=zred,sf=1.)
+    Rv = halo_profile.rh
+
+    # Interpolate in log mass
+    lgmass = np.log10(mass)
+    fmi = interp1d(age,lgmass,fill_value='extrapolate')
+    fri = interp1d(age,Rv,fill_value='extrapolate')
+
+    pmp = np.polyfit(age,lgmass,deg=4)
+    fmp = np.poly1d(pmp)
+    prp = np.polyfit(age,Rv,deg=4)
+    frp = np.poly1d(prp)
+    
+    x_new = np.arange(13,0,-0.1)
+    pl.subplot(121)
+    pl.plot(x_new,fmi(x_new),label='interp')
+    pl.plot(x_new,fmp(x_new),label='polyfit')
+    pl.title('Halo mass')
+    pl.xlabel('age')
+    pl.ylabel('$\log_{10}\,\mathrm{M_{200}}$')
+    pl.legend(frameon=False)
+
+    pl.subplot(122)
+    pl.plot(x_new,fri(x_new))
+    pl.plot(x_new,frp(x_new))
+    pl.xlabel('age')
+    pl.ylabel('Rv')
+    pl.title('Virial radius')
+    return
+
+def plot_mdyn_Rvdyn(age,mass,conc,zred):
+    """
+    A check for the m_dot_dyn and Rv_dot_dyn
+    """
+
+    lgm_dot_dyn, Rv_dot_dyn,_,_,_ = sga.calculate_tdyn(age,mass,conc,zred,return_lgmass=True)
+    
+
+    pl.subplot(121)
+    pl.plot(age,lgm_dot_dyn)
+    pl.xlabel('age (Gyr)')
+    pl.ylabel(r'$\mathrm{\dot{M_{tdyn}} \, (\log_{10}\,M_{\odot}})$')
+
+    pl.subplot(122)
+    pl.plot(age,Rv_dot_dyn)    
+    pl.ylabel(r'$\dot{Rv_{tdyn}} \, (\mathrm{kpc})$')
+    return
+
+def plot_EMERGE(itree,hm,z,cosmology,choice='history',result=None):
+    '''
+    If reuslt is given, itree is not used.
+    '''
+    b13sm = np.array([gh.lgMs_B13(np.log10(hm_tree),z) for hm_tree in hm])
+    b13sm50 = np.percentile(b13sm,50,axis=0)
+    b13sm1sigma = np.percentile(b13sm,84.1,axis=0)
+    b13sm_err = b13sm1sigma-b13sm50
+
+    if result == None:
+        hosts = [
+            sga.Host(hm[i], z, cosmology,
+                     fd=0.1, flattening=25.,
+                     disk_method='EMERGE',
+                    walk_tree='forward',
+                    cooling_threshold=False,
+                    z0_smhm=False)
+            for i in itree
+        ]
+    
+        z      = np.array([h._tree_zred      for h in hosts])
+        dm     = np.log10([h.disk_mass       for h in hosts])
+        hm     = np.log10([h.mass            for h in hosts])
+        b13sm  = np.array([gh.lgMs_B13(np.log10(h.mass), h._tree_zred) for h in hosts])
+        z1     = np.array([h._tree_zred+1      for h in hosts])
+    else:
+        z  = np.tile(z,(1000,1))
+        dm = np.log10(result['main_branch_disk_mass'])
+        hm = np.log10(result['main_branch_halo_mass'])
+        
+    
+    if choice=='history':
+        pl.plot(z.T,dm.T,alpha=0.2,c='b')
+        pl.plot(z.T,hm.T,alpha=0.2,c='k')
+        pl.xlabel('z')
+    elif choice=='smhm':
+        pl.plot(hm.T,dm.T,alpha=0.1)
+        ax = pl.gca()
+        #plot_b13_satgen(ax)
+        plot_m18(ax)
+        pl.xlabel('$\mathrm{log_{10}\,halo\,mass}$')
+
+    pl.ylabel('$\mathrm{log_{10}\,disk\,mass}$')
+
+    return
+
+def plot_tdyn(host):
+    """
+    Compare tdyn from profile and calculation
+
+    tdyn_pf = dens_profile.tdyn(Rv)
+    tdyn_cal = (Rv^3 / G / M)^0.5
+    """
+
+    pl.plot(host.Rv,host.tdyn_pf,label='profile')
+    pl.plot(host.Rv,host.tdyn_cal,label='calculate')
+    pl.xlabel('Rv (kpc)')
+    pl.ylabel('tdyn (Gyr)')
+    pl.legend(frameon=False)
+    return
+
+def plot_m18smhm(progs):
+    """
+    This is testing M18 integrated baryon conversion efficiency
+    making a smhm relation
+    """
+    hm = []
+    sm = []
+    for prog in progs:
+        hm.append(prog.mass)
+        sm.append(prog.mstar)
+
+    ax = pl.gca()
+    plot_m18(ax)
+
+    pl.scatter(np.log10(hm),np.log10(sm),s=1,label='M18')
+    pl.xlabel('$\mathrm{log_{10}\,halo\,mass}$')
+    pl.ylabel('$\mathrm{log_{10}\,stellar\,mass}$')
+    pl.legend(frameon=False,loc='lower right')
+    return
+
+def plot_integrate_instant(main,root_mass):
+    """
+    This checks the instantanious baryonic conversion efficiency can grow 
+    a disk that matches the integrated smhm relation
+    """
+
+    disk_mass = main['emerge']['main_branch_disk_mass']
+    halo_mass = main['emerge']['main_branch_halo_mass']
+
+    root_lgmass    = np.log10(halo_mass[:,0])
+    z0_disk_lgmass = np.log10(disk_mass[:,0])
+
+    fb = 0.156
+    #root_lgmass = np.log10(root_mass)
+
+    # redshift 0 m18 relation with 1 sigma
+    hm_range = np.arange(10,14,0.2)
+    upper_lgsm = []
+    lower_lgsm = []
+    for hm in hm_range:
+        hm = 10**hm
+        e,sigma = sga.integrate_b_conversion(0,hm)
+        mean_sm = fb*(hm)*e
+        upper_lgsm.append(np.log10(mean_sm)+sigma)
+        lower_lgsm.append(np.log10(mean_sm)-sigma)
+
+    ax = pl.gca()
+    #plot_m18(ax)
+
+    ax.fill_between(hm_range,upper_lgsm,lower_lgsm,alpha=0.5)
+    pl.scatter(root_lgmass,z0_disk_lgmass,s=1)
+    pl.xlim(11,13)
+    pl.ylim(7,12)
+    return
+
+def plot_instb_coeff(redshift_index=None):
+    """
+    M18 fig2
+    redshift_index 13 ~ 0.1
+    """
+
+    tree_redshifts,root_mass,_,tree_main_branch_masses = read_tree()
+
+    pl.figure()
+    if redshift_index is None:
+        for i,z in enumerate(tree_redshifts):
+            ez = np.array(sga.inst_b_conversion(tree_main_branch_masses[:,i],z,h=0.7))
+        
+            pl.scatter(np.log10(tree_main_branch_masses[:,i]),ez,s=1)
+    else:
+        ez = np.array(sga.inst_b_conversion(tree_main_branch_masses[:,redshift_index],
+                      tree_redshifts[redshift_index]))
+        pl.scatter(np.log10(tree_main_branch_masses[:,redshift_index]),ez,s=1)
+    return
+
+def plot_inteb_coeff():
+    """
+    """
+    zred = np.arange(0,14,2)
+    lghmrange = np.arange(8,13,0.2)
+    hmrange = 10**lghmrange
+
+    for z in zred:
+        ez,sigma = np.array(sga.integrate_b_conversion(z,hmrange,h=0.7))
+        pl.errorbar(lghmrange,ez,yerr=sigma,label=f'{z}')
+
+    pl.legend(frameon=False,prop={'size':8},ncols=2)
+    pl.xlabel('halo mass',fontsize=15)
+    pl.ylabel('e',fontsize=15)
+    return
+
+def plot_mstar_mb():
+    """
+    index 13 ~ z=0.1
+    m18 fig12
+    """
+    tree_redshifts,root_mass,progs,tree_main_branch_masses = read_tree(tree_setup='extend')
+    fb = 0.156
+
+    mass  = tree_main_branch_masses[:,13]
+    mstar = sga.mod_Mstar(mass,h=0.7,z=tree_redshifts[13],choice='m18',task='Mstar')
+    mb    = mass * fb
+    y1    = mstar/mb
+
+    prog_z01_index  = np.where(progs['ProgenitorZred']==tree_redshifts[13])[0]
+    print('total number of progenitros: ',len(progs['ProgenitorZred']),'number of progenitors at z=0.1: ',len(prog_z01_index))
+    prog_z01_masses = progs['ProgenitorMass'][prog_z01_index]
+    mstar_prog = sga.mod_Mstar(prog_z01_masses,h=0.7,z=tree_redshifts[13],choice='m18',task='Mstar')
+    mb_prog    = prog_z01_masses * fb
+    print(mstar_prog.shape,mb_prog.shape)
+    y2 = mstar_prog/mb_prog
+    print(np.argmax(y2))
+    print('halo mass: ',prog_z01_masses[np.argmax(y2)])
+    print(mstar_prog[np.argmax(y2)],mb_prog[np.argmax(y2)])
+
+    # more checks
+    frac = mstar_prog/prog_z01_masses
+    print('The highest mstar to mhalo fraction: ',max(frac),'mstar: ',mstar_prog[np.argmax(frac)],'mhalo: ',prog_z01_masses[np.argmax(frac)])
+    print('This prog index: ',prog_z01_index[np.argmax(frac)])
+    
+    y = np.concatenate((y1,y2))
+    lg_main_mass = np.log10(mass)
+    lg_prog_mass = np.log10(prog_z01_masses)
+    x = np.concatenate((lg_main_mass,lg_prog_mass))
+
+    totmass = 10**x
+    e,sigma = np.array(sga.integrate_b_conversion(tree_redshifts[13],totmass,h=0.7))
+
+    moster_18_default = partial(moster_18_eff_func,M1=10**11.80,epsilon=0.14,beta=1.75,gamma=0.57)
+    e1 = moster_18_default(totmass)
+
+    lghmrange = np.arange(10,14,0.1)
+    e2,_ = np.array(sga.integrate_b_conversion(tree_redshifts[13],10**lghmrange,h=0.7))
+
+    pl.figure()
+    pl.scatter(x,y,s=1,c='r')
+    pl.scatter(x,e,s=1,c='k')
+    pl.scatter(x,e1,s=1,c='b')
+    pl.plot(lghmrange,e2,c='green')
+    return
+
+def plot_conc_to_hm_smooth_zhao():
+    """
+    Check smooth concentraion vs zhao concentration by redshifts (Ludluw 2016. fig.4)
+    z = 1,2,3 ~ index = 77,102,123
+
+    Note: The concentration function reads the tage history, not the instantanious age.
+    The current eps tree has only main branch history, so it can not reproduce the figure 4 
+    due to the real abundance.
+    Unless there is a need for running the whole tree history, this will not be checked.
+    Also the concentration for subhalos used DM14 in Satgen.
+    """
+
+    return
+
+def plot_conc_and_rs_to_tage_smooth_zhao(itree):
+    """
+    """
+
+    tree_redshift,root_mass,progenitors,mainbranch_mass = read_tree()
+
+    tage = cosmology.age(tree_redshift).value
+
+    # Concentration
+    smooth_c = sga.smooth_c(mainbranch_mass[itree],tage,version='zhao')
+    zhao_c   = sga.halo_mah_to_zhao_c_nfw(mainbranch_mass[itree],tage)
+    ludlow_c = llc.ludlow_concentration(mainbranch_mass[itree],tree_redshift,cosmology)
+
+    lgsmooth_c = np.log10(smooth_c)
+    lgzhao_c   = np.log10(zhao_c)
+    lgludlow_c = np.log10(ludlow_c)
+
+    # Scale radius
+    nlev = len(tree_redshift)
+    idx_iter = range(nlev)
+
+    # halo mass
+    mhalo   = mainbranch_mass[itree]
+    lgmhalo = np.log10(mhalo)
+
+    srs = []
+    zrs = []
+    grs = []
+    lrs = []
+    srvir = []
+    zrvir = []
+    for i in idx_iter:
+
+        mass_i = mhalo[i]
+        sc_i = smooth_c[i]
+        zc_i = zhao_c[i]
+        lc_i = ludlow_c[i]
+        z_i = tree_redshift[i]
+
+        shalo_profile = NFW(mass_i,sc_i,Delta=200.,z=z_i,sf=1.)
+        zhalo_profile = NFW(mass_i,zc_i,Delta=200.,z=z_i,sf=1.)
+        lhalo_profile = NFW(mass_i,lc_i,Delta=200.,z=z_i,sf=1.)
+
+        srs.append(shalo_profile.rs)
+        zrs.append(zhalo_profile.rs)
+        lrs.append(lhalo_profile.rs)
+
+        # self.rhoc = co.rhoc(z,cfg.h,cfg.Om,cfg.OL)
+        # self.rhoh = self.Deltah * self.rhoc
+        # self.rh = (3.*self.Mh / (cfg.FourPi*self.rhoh))**(1./3.)
+        srvir.append(shalo_profile.rh)
+        zrvir.append(zhalo_profile.rh)
+
+        if i<4:
+            print('Mhalo: ',mass_i)
+            print('M200: ',shalo_profile.M(shalo_profile.rh))
+
+        # The virial radius is the same
+        rs_gao = scale_radius_gao(mass_i,z_i) * shalo_profile.rh
+        grs.append(rs_gao)
+
+    # It says the mass can be M200 or Mvir depending on the model choice.
+    # But there is only one choice (DM14), also the difference between M200 and
+    # Mvir is small.
+    dmc = init.concentration(mhalo,tree_redshift)
+    lgdmc = np.log10(dmc)
+
+    pl.figure(figsize=(16,6))
+    pl.subplot(121)
+
+    pl.plot(tage,srs,c='k',label='smooth')
+    pl.plot(tage,zrs,c='r',label='Zhao')
+    pl.plot(tage,grs,c='green',label='Gao')
+    pl.plot(tage,lrs,c='blue',label='Ludlow')
+
+    pl.xlabel('age (Gyr)',fontsize=15)
+    pl.ylabel('$\mathrm{r_{s} \, (kpc)}$',fontsize=15)
+    pl.legend(loc='upper left',frameon=False,prop={'size':10})
+
+    pl.subplot(122)
+
+    pl.plot(tage,lgsmooth_c,c='k',label='smooth')
+    pl.plot(tage,lgzhao_c,c='r',label='Zhao')
+    pl.plot(tage,lgdmc,c='purple',label='DM14')
+
+    pl.xlabel('age (Gyr)',fontsize=15)
+    pl.ylabel('$\mathrm{log_{10}\, c}$',fontsize=15)
+
+    pl.legend(loc='lower right',frameon=False,prop={'size':10})
+
+    return
+
+def plot_scale_radius_tage(itree):
+    """
+    check halo scale radius and disk scale radius
+    """
+    tree_redshift,root_mass,progenitors,mainbranch_mass = read_tree()
+
+    mhalo = mainbranch_mass[itree]
+
+    host = sga.Host(mhalo,tree_redshift,cosmology,fd=0.1,flattening=25.,disk_method='EMERGE',
+            walk_tree='forward',cooling_threshold=False,z0_smhm=False,smhm='m18')
+
+    rs_disk = host.scale_radius
+    rs_halo = [hhdp.rs for hhdp in host.halo_dens_profile]
+    conc = host.concentration
+    tage = host.t_age
+
+    ax1 = pl.subplot(111)
+
+    pl.plot(tage,rs_disk,c='k',label='disk')
+    pl.plot(tage,rs_halo,c='r',label='halo')
+    pl.ylabel('$r_{s}$',fontsize=15)
+    pl.legend(loc='upper left',frameon=False,prop={'size':10})
+    
+    ax2 = ax1.twinx()
+    pl.plot(tage,conc,c='b')
+    pl.ylabel('c',fontsize=15)
+
+    ax1.set_xlabel('age (Gyr)',fontsize=15)
+    
+    return
 #########################################################
 ### debug
 def debug_prog_matching(data,models,r=10,f=100):
@@ -980,4 +1630,95 @@ def debug_prog_matching(data,models,r=10,f=100):
     print("Progenitors have large initial mass difference ({} times): ".format(f),mcounter)
     return #i_rdiff_far,i_hmdiff_large
 
+def debug_smhm_range(nrepeat,zrange=None,hmrange=None,choice='B13',plot_figure=True):
+    """
+    """
+    if zrange is None:
+        zrange  = np.arange(0,24,0.2)
+    else:
+        zrange==zrange
+
+    if hmrange is None:
+        hmrange = 10**np.arange(9,12.7,0.2)    
+        lghmrange = np.log10(hmrange)
+    else:
+        hmrange==hmrange
+        lghmrange = np.log10(hmrange)
+
+    maxsm = 0
+
+    for hm in hmrange:
+        for _ in np.arange(nrepeat):
+            sm = np.array([sga.mod_Mstar(hm,z=z,choice=choice,task='Mstar') for z in zrange])
+            maxsm_this_range = max(sm)
+            if maxsm_this_range>maxsm:
+                maxsm = maxsm_this_range
+                hm_this_sm = hm
+                z_this_sm  = zrange[np.argmax(sm)]
+            if plot_figure:
+                pl.scatter(np.repeat(np.log10(hm),len(sm)),np.log10(sm),s=2)
+
+    print('max sm: ',maxsm,'hm for this sm: ',hm_this_sm,'z for this sm: ',z_this_sm)
+
+    if plot_figure:
+        #pl.figure(figsize=(8,6))
+        if choice=='B13':
+            ax = pl.gca()
+            plot_b13_satgen(ax)
+
+        pl.xlabel('$\mathrm{\log_{10}\, halo \,mass\,(M_{\odot})}$',fontsize=15)
+        pl.ylabel('$\mathrm{\log_{10}\, stellar(disk) \,mass\,(M_{\odot})}$',fontsize=15)
+        if hmrange is None:
+            pl.ylim(9,13)
+        else:
+            pl.xlim(min(lghmrange),max(lghmrange))
+
+    return
+
+def check_sm_growth_logic(n_repeat=10,sigma=1):
+    """
+    Given two slop, one is steep and one is shallow, check if shallow slop makes 
+    sm growth more easily to stay outside one sigma once fell outside one sigma.
+
+    Maybe a larger time step also has an effect? (maybe not) 
+    """
+
+    x = np.arange(0, 20, 0.5)
+    
+    pl.figure(figsize=(8, 6))
+    
+    for rep in range(n_repeat):
+        prevy = 0
+        y, ymax, ymin = [], [], []
+        ymax1, ymin1 = [], []
+
+        for xx in x:
+            if xx <= 10:
+                slope = 1
+                yy = np.random.normal(xx * slope, 0.5)
+                ymax.append(xx * slope + 0.5)
+                ymin.append(xx * slope - 0.5)
+                ymax1.append(xx * slope + 0.5*sigma)
+                ymin1.append(xx * slope - 0.5*sigma)
+            else:
+                slope = 0.2
+                yy = np.random.normal(xx * slope + 10*(1-slope), 0.5)
+                ymax.append(xx * slope + 10*(1-slope) +0.5)
+                ymin.append(xx * slope + 10*(1-slope) -0.5)
+                ymax1.append(xx * slope + 10*(1-slope) + 0.5*sigma)
+                ymin1.append(xx * slope + 10*(1-slope) - 0.5*sigma)
+            if yy > prevy:
+                y.append(yy)
+                prevy = yy
+            else:
+                y.append(prevy)
+    
+        # Plot this realization
+        pl.scatter(x, y, s=8, zorder=2, alpha=0.6, label=f"Run {rep+1}" if rep==0 else None)
+    
+    # Grey shaded region showing ±1σ band
+    ax = pl.gca()
+    ax.fill_between(x, ymax, ymin, alpha=0.4, facecolor='grey', zorder=1)
+    ax.fill_between(x, ymax1, ymin1, alpha=0.3, facecolor='cyan', zorder=1)
+    return
 #########################################################

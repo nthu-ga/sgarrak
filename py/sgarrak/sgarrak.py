@@ -8,8 +8,13 @@ import warnings
 warnings.filterwarnings("ignore", category=RuntimeWarning)
 import astropy.cosmology as cosmo
 from scipy.interpolate import interp1d
+from scipy.stats import truncnorm
 
 from astropy.table import Table
+from astropy import constants as const
+from astropy import units as u
+
+from importlib import reload
 
 import copy
 
@@ -72,6 +77,30 @@ import galhalo as gh
 import aux
 import init
 
+# Setting the config parameters
+cfg.h  = 0.73
+cfg.Om = 0.25
+cfg.Ob = 0.0465
+cfg.OL = 0.75 
+cfg.s8 = 0.8
+cfg.ns = 1.
+# I remember at some point we want to use this paramters, not the default.
+# cfg.lnL_type = 3
+# cfg.lnL_pref = 1
+
+LUDLOW_C_PATH = '/data/chungwen/cwt/ludlowc/ludlowc/py/ludlowc'
+if not LUDLOW_C_PATH in sys.path:
+    sys.path.append(LUDLOW_C_PATH)
+
+import ludlowc as llc
+reload(llc)
+
+SRC_PATH = '/data/chungwen/sgarrak'
+if not SRC_PATH in sys.path:
+    sys.path.append(SRC_PATH)
+
+import src.strip as strip
+reload(strip)
 ############################################################
 def read_hdf5(path,datasets,group='/'):
     """
@@ -100,45 +129,274 @@ def is_iterable(x):
     return False
 
 ############################################################
-def avg_smhm(n,return_edge=False):
+def mod_Mstar(hm,h=0.7,z=0.,choice='m18',task='Mstar',**kwargs):
     """
-    Averaged stellar masses given redshifts and halo masses.
-    By drawing N number of random samples with different z
-    for each halo mass.
+    Customized Mstar 
+    The halo mass from our eps tree already dealt with h
     
-    The halo mass range was chosen by min-cfg.mres max-max tree mass
+    B13 assumed parameters: Omega_M = 0.27
+                            Omega_lambda = 0.73
+                            h = 0.7
+                            ns = 0.95
+                            sigma8 = 0.82
+
+    B19 assumed parameters: h = 0.678
+
+    m18 adjusts h in the parameters. delta_t is now total age.
+    It only gives Mstar for the smhm relation.
+    m18 assume a baryonic fraction value, but satgen uses cfg.Ob/cfg.Om.
+
+    Parameters: h: Hubble parameter assumed in the merger tree
+                hm: linear halo mass
+
+    Return: linear stellar mass
+
+    """
+
+    if choice=='B13':
+        h_model = 0.7
+        hm *= (h/h_model)
+        if task=='Mstar':
+            sm = init.Mstar(hm,z,choice=choice)
+        elif task=='lgMs_B13':
+            sm = 10**gh.lgMs_B13(np.log10(hm),z)
+        else:
+            raise ValueError(f"Invalid task '{task}' for choice 'B13'")
+        
+    elif choice=='RP17':
+        h_model = 0.7 # Not used, needs to check
+        hm *= (h/h_model)
+        if task=='Mstar':
+            sm = init.Mstar(hm,z,choice=choice)
+        elif task=='lgMs_RP17':
+            sm = 10**gh.lgMs_RP17(np.log10(hm),z)
+        else:
+            raise ValueError(f"Invalid task '{task}' for choice 'RP17'")
+
+    elif choice=='B19':
+        h_model = 0.678
+        hm *= (h/h_model)
+        raise NotImplementedError('B19: Not provide now')
+
+    elif choice=='m18':
+        h_model = 0.678
+        fb = 0.156 # cfg.Ob/cfg.Om
+        e,sigma = integrate_b_conversion(z,hm,h=h_model)
+        # Should it have a lower limit of hm*fb?
+        sm = np.minimum(fb*hm,10**(np.random.normal(np.log10(fb*hm*e),sigma)))
+    sm *= (h_model/h)
+    return sm 
+
+############################################################
+### EMERGE
+## EMERGE is an empirical model for star formation. see Moster et al. 2018
+## NOTE: EMERGE only use 'forward' method.
+#        (Although the logic of tdyn is current time - tdyn.)
+#        EMERGE uses h=0.6781
+def mstar(delta_t,z,
+          M_dot_dyn,Rv_dot_dyn,e,dens_profile,
+          h=0.7):
+    """
+    The main part of the equations. It calculates the stellar mass growth 
+    between each time step.
+
+    Syntax: stellar mass growth = (in-situ formation - dying stars)
     
-    Note init.Mstar reads linear halo mass
+    f_loss is from Chabrier 2003 IMF    
+
+    Parameters: delta_t: t-t'
+                M_dot_dyn: halo growth rate over a dynamical time
+                Rv_dot_dyn: virial radius growth rate over a dynamical time
+                e: instantanious baryon conversion efficiency
+                dens_profile: halo density profile
+
+    Return: Stellar mass increased in delta_t
+
+    NOTE: 
+    m_loss_dot does not include the instantaneous recycling.
+
+    macc is not needed for our purpose.
+
+    cww:
+    The model only fit to z=10?
+    """
+
+    mstar_dot = sfr(M_dot_dyn,Rv_dot_dyn,e,dens_profile,z)
+    f_loss = 0.05 * np.log(1+delta_t/(1.4/1e3)) # eq.12 in Gyr
+    delta_mstar = delta_t * (mstar_dot * (1 - f_loss)) # eq.11
+    return delta_mstar
+
+def sfr(M_dot_dyn,Rv_dot_dyn,e,dens_profile,z):
+    """
+    The halo mass growth due to accretions is the accreted masses - pseudo evolution of
+    the virial radius growth over time as the background density decrease.
+
+    Syntax: M_dot = <M_dot>_dyn - 4 * pi * Rv^2 * rho(Rv) * <Rv_dot>_dyn
+
+    The baryonic growth rate at two time steps is the baryons brought from mergers
+    
+    Syntax: mb_dot = fb * M_acc
+
+    The stellar mass forms between two time steps is the mb_dot times the instantaneous 
+    baryonic conversion efficiency.
+
+    Syntax: mstar_dot = mb_dot * e
+
+    Parameter: M_dot_dyn: halo growth rate over a dynamical time
+               Rv_dot_dyn: virial radius growth rate over a dynamical time
+               e: instantanious baryon conversion efficiency
+               dens_profile: halo density profile
+               z: redshift
+
+    NOTE: The cosmology in our model does not set Ob0. Maybe this needs to be changed.
+
+    cww:
+    This method acctually calculate the baryonic budget from mergers, which solves the 
+    ambiguity of gas brought by accreted subhalos when using a purely SMHM relation.
     
     """
-    zrange  = np.arange(0,14,0.2)
-    N = n
-    Nz = np.random.choice(zrange,N)
+
+    # Cosmology we use
+    Omega_b = 0. 
+    Omega_m = 0.25
+    # Omega_b/Omega_m from Moster18
+    fb = 0.156 
+    #Omega_b = 0.0484
+    #Omega_m = 0.308
+
+    # virial radius
+    Rv = dens_profile.rh
+    # density at the virial radius.
+    rho_Rv = dens_profile.rho(Rv,z)
+
+    # halo growth rate due to accretion and pseudo virial radius growth
+    M_dot = M_dot_dyn - 4 * np.pi * Rv**2 * rho_Rv * Rv_dot_dyn # eq.4
+
+    # baryonic growth rate
+    mb_dot = fb * M_dot # eq.2
+
+    mstar_dot = mb_dot * e # eq.1
+    return mstar_dot
+
+def inst_b_conversion(M,z,h=0.7):
+    """
+    Instantaneous baryon conversion efficiency e
     
-    hmrange = 10**np.arange(2,13,0.5)
+    Table 6 is the fitting result from MCMC.
+    """
 
-    avgsm = []
-    maxsm = []
-    minsm = []
+    # Table 6; best fit
+    M0 = 11.339
+    Mz = 0.692
+    e0 = 0.005
+    ez = 0.689
+    beta0   = 3.344
+    betaz   = -2.079
+    gamma0  = 0.966
+    h_model = 0.6781
 
-    for hm in hmrange:
-        smlist = [init.Mstar(hm,z, choice='B13') for z in Nz]
-        avgsm.append(np.median(smlist))
-        maxsm.append(max(smlist))
-        minsm.append(min(smlist))
+    # h correction
+    M0 += np.log10(h_model/h)
+    Mz += np.log10(h_model/h)
+    
+    a = 1/(z+1)
+    lgM1 = M0 + Mz*(1-a)          # eq.7
+    en = e0 + ez * (1-a)          # eq.8
+    beta  = beta0 + betaz * (1-a) # eq.9
+    gamma = gamma0                # eq.10
+    M1 = 10**lgM1
+    return 2 * en / ((M/M1)**-beta + (M/M1)**gamma) # eq.5
 
-    f = interp1d(hmrange,avgsm)
+def calculate_tdyn(age,mass,conc,zred,h=0.7,return_lgmass=False):
+    """
 
-    if return_edge:
-        return np.array(maxsm),np.array(minsm),hmrange
+    Syntax:
+    tdyn = (Rv^3/GM)^0.5
 
-    return f
+    Parameters: age: age of main halos in Gyr
+                mass: linear mass of main halos
+                conc: concentration from NFW
+                zred: redshift
+                return_lgmass: This gives mass and Rv in log10 for
+                               analysis.
 
+    cww:
+    Maybe h affects the mass and the virial radius here?
+
+    """
+
+    #G = const.G.to(u.kpc**3/u.M_sun/u.Gyr**2).value
+
+    halo_profile = NFW(mass,conc,Delta=200.,z=zred,sf=1.)
+    Rv = halo_profile.rh
+    tdyn_pf = halo_profile.tdyn(Rv)
+
+    # Interpolate in log mass
+    lgmass = np.log10(mass)
+    fm = interp1d(age,lgmass,fill_value='extrapolate')
+    fr = interp1d(age,Rv,fill_value='extrapolate')
+
+    m_dot_dyn  = []
+    Rv_dot_dyn = []
+    lgm_dot_dyn = []
+    tdyn_cal = []
+    for rv,m,ag in zip(Rv,mass,age):
+        tdyn = (rv**3/cfg.G/m)**0.5 # Gyr
+        tdyn_cal.append(tdyn)
+        if ag<tdyn:
+            raise ValueError(f"At the age '{ag}', the tdyn is larger")
+        m_dot_dyn.append((m-10**fm(ag-tdyn))/tdyn) #eq.3
+        Rv_dot_dyn.append((rv-fr(ag-tdyn))/tdyn)
+        lgm_dot_dyn.append(np.log10(m-10**fm(ag-tdyn))/tdyn)
+
+    if return_lgmass:
+        return lgm_dot_dyn,Rv_dot_dyn,tdyn_pf,tdyn_cal,Rv
+
+    return m_dot_dyn,Rv_dot_dyn,tdyn_pf,tdyn_cal,Rv
+
+## EMERGE SMHM relation
+def integrate_b_conversion(zred,mass,h=0.7):
+    """
+    Integrated beryon conversion efficiency in Moster18
+
+    Parameters: zred: redshift. scaler
+                mass: halo mass. array or scaler
+    """
+
+    # coefficients, table 8 all centrals
+    coef = dict()
+    z               = np.array([0.1,0.5,1.0,2.0,4.0,8.0])
+    coef['M1']      = np.array([11.80,11.85,11.95,12.,12.05,12.10])
+    coef['en']      = np.array([0.14,0.16,0.18,0.18,0.19,0.24])
+    coef['beta']    = np.array([1.75,1.70,1.60,1.55,1.50,1.30])
+    coef['gamma']   = np.array([0.57,0.58,0.60,0.62,0.64,0.64])
+    coef['M_sigma'] = np.array([10.80,10.70,10.60,10.50,10.40,10.30])
+    coef['sigma0']  = np.array([0.16,0.14,0.12,0.10,0.08,0.02])
+    coef['alpha']   = np.array([1.0,0.90,0.75,0.50,0.40,0.10])
+
+    m18_h = 0.6781
+
+    # h correction
+    coef['M1'] += np.log10(m18_h/h)
+    coef['M_sigma'] += np.log10(m18_h/h)
+
+    # interpolate, masses are in log.
+    for k,d in coef.items():
+        f = interp1d(z,d,fill_value='extrapolate')
+        coef[k] = f(zred)
+
+    # uncertainty, eq.25
+    sigma = coef['sigma0'] + np.log10((mass/10**coef['M_sigma'])**(-coef['alpha']) + 1)
+
+    # eq.5
+    e = 2 * coef['en'] / ((mass/10**coef['M1'])**(-coef['beta']) + (mass/10**coef['M1'])**coef['gamma'])
+    return e,sigma 
 
 ############################################################
 class Host():
     def __init__(self, mass, zred, cosmology, fd=0.0, flattening=0., disk_method='fd',
-                 output_zred=None, walk_tree='backward', static_halo=False):
+                 output_zred=None, walk_tree='backward', smhm='m18',
+                 cooling_threshold=False, z0_smhm=False):
         """
         
         Parameters: fd: disk mass fraction
@@ -218,29 +476,55 @@ class Host():
         
         if self.evolving_mass:
             self.concentration = halo_mah_to_zhao_c_nfw(self.mass, self.t_age)
+            #self.concentration = smooth_c(self.mass,self.t_age,version='zhao')
+            #self.concentration = llc.ludlow_concentration(self.mass,self.zred,self.cosmology)
         else:
             self.concentration = np.atleast_1d(init.concentration(self.mass[0], self.zred[0], choice='DM14'))
             
-        # Make a profile for each timestep
+
+        if disk_method in ('interp_zavg'):
+            # Add a check for those disk_methods don't have forward method, so idx_iter does not accidentally
+            # reverse the index.
+            if walk_tree=='forward':
+                raise ValueError(f"This disk method '{disk_method}' does not support forward method.")
+        elif disk_method=='EMERGE':
+            # Progenitor infos for mstar_acc...
+            # I think this step will break the self.interpolated part (zred & output_zred),
+            # unless it also gets interpolated. Or just remove this output_zred?
+            if walk_tree=='backward':
+                raise ValueError(f"This disk method '{disk_method}' only integrate stellar mass forward.")
+
+        # halo growth rate over the dynamical time
+        M_dot_dyn,Rv_dot_dyn,self.tdyn_pf,self.tdyn_cal,self.Rv = calculate_tdyn(self.t_age,self._tree_mass,self.concentration,self.zred,return_lgmass=False)
+
+
+        # Make a profile for each redshift
         self.dens_profile = list()
         self.halo_dens_profile = list()
         self.has_disk = fd > 0
 
         if self.has_disk:
 
-            mean_sm_z0   = 10**gh.lgMs_B13(np.log10(self.mass[0]),z=0.)
-            mean_sm_nlev = 10**gh.lgMs_B13(np.log10(self.mass[self.nlev-1]),self.zred[self.nlev-1])
+            mean_sm_z0   = mod_Mstar(self.mass[0],h=0.73,z=0.,choice=smhm,task='lgMs_B13')
+            mean_sm_nlev = mod_Mstar(self.mass[self.nlev-1],h=0.73,z=self.zred[self.nlev-1],choice=smhm,task='lgMs_B13')
  
             if walk_tree == 'backward':
-                starting_disk_mass = init.Mstar(self.mass[0], self.zred[0], choice='B13')
-            else:
+                starting_disk_mass = mod_Mstar(self.mass[0],h=0.73,z=self.zred[0], choice=smhm,task='Mstar')
+            elif walk_tree=='forward':
                 # Assign starting mass in the iteration
                 starting_disk_mass = 0
                 # FIXME this breaks the non-step methods
                 #starting_disk_mass = init.Mstar(self.mass[self.nlev-1], 
                 #                                self.zred[self.nlev-1], choice='B13')
+            else:
+                # Add a safety check so that the arrays are not reverted for disk methods 
+                # that do not have forward method
+                raise ValueError(f"walk tree method '{walk_tree}'  not supported")
 
             prev_disk_mass = starting_disk_mass
+
+            # Save the scale radius for checking
+            self.scale_radius = list()
 
             self.disk_mass = list()
             self.disk_reff = list()
@@ -262,6 +546,7 @@ class Host():
 
                 Reff = gh.Reff(halo_profile.rh,conc_i) # Virial radius & concentration
                 scale_radius = 0.766421/(1.+1./flattening) * Reff
+                self.scale_radius.append(scale_radius)
                 scale_height = scale_radius / flattening
 
                 if disk_method=='interp':
@@ -272,33 +557,23 @@ class Host():
                     else:
                         disk_mass = starting_disk_mass * (mass_i/self.mass[self.nlev-1])
                     self.disk_mass.append(disk_mass)
-                    self.disk_reff.append(Reff)
-
-                elif disk_method == 'interp_zavg':
-                    # Averaging redshift scatter of SMHM.
-                    # Ignore starting_disk_mass
-                    avg_fit   = avg_smhm()
-                    disk_mass = avg_fit(mass_i)
-                    self.disk_mass.append(disk_mass)
-                    self.disk_reff.append(Reff)
 
                 elif disk_method == 'interp_sm':
                     # Use the mean z=0 SMHM relation to get the stellar mass difference.
                     # And use the difference to scale down the z=0 disk mass.
-                    mean_sm_ilev = 10**gh.lgMs_B13(np.log10(mass_i),z_i)
+                    mean_sm_ilev = mod_Mstar(mass_i,h=0.73,z=z_i,choice='B13',task='lgMs_B13')
                     if walk_tree == 'backward':
                         disk_mass = starting_disk_mass * (mean_sm_ilev/mean_sm_z0)
                     else:
                         disk_mass = starting_disk_mass * (mean_sm_ilev/mean_sm_nlev)
                     self.disk_mass.append(disk_mass)
-                    self.disk_reff.append(Reff)
 
                 #elif disk_method == 'roll_dice':
                 #    # Take the stellar mass as long as it goes up in the past
                 #    # If init.Mstar finds a higher mass, do it again.
                 #    # This might cost many resources if the current level gives the lowest
                 #    # stellar mass (The chance of finding a lower stellar mass at eairlier 
-                #    # time is lower).
+                #    # time is lower).`
                 #    # Note this method makes job never finish if the rolling result is 
                 #    # close to the low edge (it is difficult for the next level to find 
                 #    # another lower stellar mass.).
@@ -314,16 +589,16 @@ class Host():
                     # (i.e. the disk does not grow)
 
                     # The disk size does not depend on the disk mass
-                    self.disk_reff.append(Reff)
                     
-                    # For the forward method, we also required that the disk
-                    # mass only grows if the halo mass is above the cooling
+                    # For the forward method, we can require that the disk
+                    # mass only grows if a halo mass is above the cooling
                     # threshold.
-        
-                    # HACK: always use the z=0 relation here for consistency
-                    # across redshfits
-                    #disk_mass = init.Mstar(mass_i, z_i, choice='B13')
-                    disk_mass = init.Mstar(mass_i, 0, choice='B13')
+
+                    # Adds disk mass with z0 SMHM relation for checking.
+                    if z0_smhm: 
+                        disk_mass = mod_Mstar(mass_i,h=0.73,z=0.,choice='B13',task='Mstar')
+                    else:
+                        disk_mass = mod_Mstar(mass_i,h=0.73,z=z_i,choice='B13',task='Mstar')
                     grow_disk = threshold_check(mass_i,z_i)
 
                     if walk_tree == 'backward':
@@ -345,26 +620,49 @@ class Host():
                     else: 
                         # We have drawn a disk mass for a later time
                         if disk_mass >= prev_disk_mass:
-                            if grow_disk == 1:
-                                # The halo can cool gas, disk grows
+                            # Check additional cooling threshold to grow disk mass
+                            if cooling_threshold:
+                                if grow_disk:
+                                    # The halo can cool gas, disk grows
+                                    self.disk_mass.append(disk_mass)
+                                    prev_disk_mass = disk_mass
+                                else:
+                                    # The halo can't cool gas, no growth
+                                    self.disk_mass.append(prev_disk_mass)
+                            else:
                                 self.disk_mass.append(disk_mass)
                                 prev_disk_mass = disk_mass
-                            else:
-                                # The halo can't cool gas, no growth
-                                self.disk_mass.append(prev_disk_mass)
                         else:
                             # Disk can't be less massive in the future;
                             # force no change in mass for this step.
                             self.disk_mass.append(prev_disk_mass)
 
+                elif disk_method == 'EMERGE':
+                    if i==131:
+                        
+                        disk_mass = mod_Mstar(mass_i,h=0.73,z=z_i,choice=smhm)
+                        self.disk_mass.append(disk_mass)
+                    else:
+                        e = inst_b_conversion(mass_i,z_i)
+                        t = self.t_age[i]
+                        delta_t = t - self.t_age[i+1]
+                        delta_disk_mass = mstar(delta_t,z_i,
+                                          M_dot_dyn[i],Rv_dot_dyn[i],e,halo_profile,
+                                          h=0.73)
+                        disk_mass += delta_disk_mass
+                        self.disk_mass.append(disk_mass)
+
+
+
                 elif disk_method == 'fd':
                     # Use a fixed disk mass fraction
                     disk_mass = fd * mass_i
                     self.disk_mass.append(disk_mass)
-                    self.disk_reff.append(Reff)
                 else:
-                    raise ValueError(f"Disk method {disk_mathod:s} not supported")
+                    raise ValueError(f"Disk method {disk_method:s} not supported")
                 
+                self.disk_reff.append(Reff)
+
                 disk_profile = MN(disk_mass,scale_radius,scale_height)
 
                 # Pre-generate the interpolator for M(<r) by computing M(<10kpc)
@@ -373,6 +671,7 @@ class Host():
                 self.dens_profile.append([halo_profile, disk_profile])
                 self.halo_dens_profile.append(halo_profile)
                 self.disk_dens_profile.append(disk_profile)
+
         else:
             for i in range(self.nlev):
                 halo_profile = NFW(self.mass[i],
@@ -385,7 +684,7 @@ class Host():
                 self.halo_dens_profile.append(halo_profile)
 
         # Reverse the array for forward method, so no need to change other function.
-        if self.has_disk:
+        if disk_method in ('step', 'interp', 'interp_sm', 'EMERGE'):
             if walk_tree != 'backward':
                 self.disk_mass = self.disk_mass[::-1]
                 self.disk_reff = self.disk_reff[::-1]
@@ -421,16 +720,15 @@ def threshold_check(hm,z):
     else:
         threshold,_ = Tvir_threshold_rez10fit()
     
-    if np.log10(hm)>threshold(z):
-        return 1
+    return np.log10(hm)>threshold(z)
     
-    return 0
 
 ############################################################
 class Progenitor():
     def __init__(self, mass, host,
                  cosmology=None, zred=None, level=None, mstar=None,
-                 orbit_init_method='li2020', xc=None, eps=None):
+                 orbit_init_method='li2020', xc=None, eps=None, xv=None,
+                 conc=None, mstar_shift=None,smhm='m18'):
         """
         orbit_init_method: one of the following:
             - None: use xc,eps method
@@ -492,7 +790,10 @@ class Progenitor():
             self.init_disk_mass = self.host.disk_mass[self.level]
 
         # Draw progenitor concentration
-        self.concentration = init.concentration(self.mass,self.zred,choice='DM14')
+        if conc is None:
+            self.concentration = init.concentration(self.mass,self.zred,choice='DM14')
+        else:
+            self.concentration = conc
 
         # The halo potential is a "Green" profile; an NFW with additional
         # methods to adjust for the effects of tidal stripping.
@@ -500,13 +801,19 @@ class Progenitor():
 
         # Draw stellar mass from mstar-mhalo releation
         if mstar is None:
-            self.mstar_init = init.Mstar(self.mass_init, self.zred, choice='B13')
+            if mstar_shift is None:
+                self.mstar_init = mod_Mstar(self.mass_init,h=0.7,z=self.zred,choice=smhm)
+            else:
+                # Add a shift on the SMHM relation for progenitors to simulate different 
+                # formation models (?).
+                self.mstar_init = mod_Mstar(self.mass_init,h=0.7,z=self.zred,choice=smhm)
         else:
             self.mstar_init = mstar
         self.mstar = self.mstar_init
 
         # Check if the progenitor above the cooling threshold at infall.
         # It would be better to check the entire assembly history.
+        # This is only a flag, the prog mstar is still computed by the smhm relation even not above the threshold.
         self.has_galaxy = threshold_check(mass,self.zred)
 
         # The mass within rmax is used in the stripping calculations
@@ -525,6 +832,8 @@ class Progenitor():
             self.xv = init.orbit_from_Li2020(self.init_host_halo_dens_profile,
                                              self.vel_ratio,
                                              self.gamma)
+        elif orbit_init_method == 'xv':
+            self.xv = xv
         else:
             raise Exception
 
@@ -588,6 +897,15 @@ def halo_mah_to_zhao_c_nfw(mass, t_age_gyr):
         h_c_nfw.append(init.c2_fromMAH(mass[i:],t_age_gyr[i:]))
     return np.array(h_c_nfw)
 
+def smooth_c(Mv,t,version='zhao'):
+    if(version == 'vdb'):
+        coeff1 = 3.40
+        coeff2 = 6.5
+    elif(version == 'zhao'):
+        coeff1 = 3.75
+        coeff2 = 8.4
+    idx = aux.FindNearestIndex(Mv,0.04*Mv[0])
+    return 4.*(1.+(t/(coeff1*t[idx]))**coeff2)**0.125
 ############################################################
 def cyl_to_cart_position(xv):
     """
@@ -605,23 +923,122 @@ def cyl_to_cart_position(xv):
     Y = R*np.sin(phi)
     return np.array([X,Y,Z])
 
-############################################################
-def reshape_coors(coorlist,Narray):
-    """
-    Re-shape the coors list to be the same size to the 
-    other parameters when it is below mres/rres(?).
-    """
-    
-    below_res_coor = [-1,-1,-1]
-    if len(coorlist)!=Narray:
-        below_res_steps = Narray-len(coorlist)
-        coorlist.extend([below_res_coor]*below_res_steps)
-    return
+import numpy as np
 
+def cylindrical_to_cartesian_phase(R, phi, z, VR, Vphi, Vz):
+    """
+    Convert 6D cylindrical (R,phi,z,VR,Vphi,Vz)
+    to Cartesian (x,y,z,vx,vy,vz).
+
+    Parameters
+    ----------
+    R, phi, z, VR, Vphi, Vz : array_like
+        Cylindrical position–velocity components.
+
+    Returns
+    -------
+    x, y, z, vx, vy, vz : ndarray
+        Cartesian components, same broadcasted shape.
+    """
+    R  = np.asarray(R)
+    phi = np.asarray(phi)
+    z  = np.asarray(z)
+    VR = np.asarray(VR)
+    Vphi = np.asarray(Vphi)
+    Vz = np.asarray(Vz)
+
+    # Position
+    x = R * np.cos(phi)
+    y = R * np.sin(phi)
+
+    # Velocities
+    vx = VR * np.cos(phi) - Vphi * np.sin(phi)
+    vy = VR * np.sin(phi) + Vphi * np.cos(phi)
+    vz = Vz
+
+    return x, y, z, vx, vy, vz
+
+def valid_coors(coors):
+    """
+    This function filters [-1,-1,-1] in the coordinate array.
+
+    [-1,-1,-1] coordinates were fiiled in when a progenitor was·
+    below the cfg resolution to keep the arrays having the same shape.
+    """
+
+    mask = ~(np.all(coors == -1, axis=1))
+    coors_valid = coors[mask]
+
+    return coors_valid
+############################################################
+def reshape_to_tsteps_shape(input_array, t_shape, task='coor'):
+    """
+    Pad an array along the time axis to have length t_shape.
+
+    Parameters
+    ----------
+    input_array : array-like
+        Shape (n_steps, ndim) or list of length n_steps.
+    t_shape : int
+        Desired number of timesteps.
+    task : {'coor', 'xv'}
+        'coor' -> 3D positions, pad with [-1, -1, -1]
+        'xv'   -> 6D phase space, pad with 6 x -1
+
+    Returns
+    -------
+    arr : np.ndarray
+        Array of shape (t_shape, ndim), padded with -1 rows
+        at the end if input is shorter. If already length
+        t_shape, returned unchanged. If longer, raises.
+    """
+
+    if task == 'coor':
+        below_res_arr = [-1, -1, -1]
+    elif task == 'xv':
+        below_res_arr = [-1, -1, -1, -1, -1, -1]
+    else:
+        raise ValueError('Not a task')
+
+    # Convert to array
+    arr = np.asarray(input_array)
+
+    # Handle the 1D case like a list of rows
+    ndim = len(below_res_arr)
+    if arr.ndim == 1:
+        # Try to infer if it's a single vector (len=ndim)
+        # or a flat list of length n_steps with unknown layout.
+        if arr.size == ndim:
+            arr = arr.reshape(1, ndim)
+        else:
+            # If this happens in your use case, we can refine this logic.
+            raise ValueError(f"Cannot interpret 1D input of length {arr.size} as (n_steps, {ndim}).")
+
+    if arr.shape[1] != ndim:
+        raise ValueError(
+            f"Expected second dimension {ndim} for task='{task}', "
+            f"got shape {arr.shape}."
+        )
+
+    n_steps = arr.shape[0]
+    if n_steps == t_shape:
+        return arr
+    if n_steps > t_shape:
+        raise ValueError(
+            f"Input has more timesteps ({n_steps}) than t_shape={t_shape}."
+        )
+
+    # Need to pad with -1 rows
+    below_res_steps = t_shape - n_steps
+    pad_block = np.full((below_res_steps, ndim), -1, dtype=arr.dtype)
+
+    return np.vstack([arr, pad_block])
 ############################################################
 def evolve_orbit(host, prog ,tsteps=None, 
                  evolve_prog_mass=False, 
-                 evolve_past_res_limits=False):
+                 evolve_past_res_limits=False,
+                 alpha_shift=None,
+                 integrate_strip=False):
     """
     tstep: timesteps measured forwards from the initial conditions at 
         infall. 
@@ -642,13 +1059,20 @@ def evolve_orbit(host, prog ,tsteps=None,
     prog_masses = [prog.mass_init]
     prog_mstars = [prog.mstar_init]
     prog_status = [STATUS_PROG_INTACT]
-    prog_coors  = [cyl_to_cart_position(prog.xv)]    
     prog_circularity = [prog.circularity_init]
-
+    prog_coors  = [compute_coordinates(prog.xv)]    
+    prog_xv = []
+    acceleration_phi = []
+    acceleration_fgrav = []
     has_galaxy  = [prog.has_galaxy]
 
     if host.has_disk:
         host_disk_masses = [prog.init_disk_mass]
+
+    if integrate_strip:
+        strip_star_list = []
+        strip_halo_list = []
+        strip_tage_list = []
 
     # Working variables
     prog_mass  = prog_masses[0]
@@ -661,17 +1085,18 @@ def evolve_orbit(host, prog ,tsteps=None,
     # Instead make copies.
     host_dp    = copy.deepcopy(prog.init_host_dens_profile)
     prog_dp    = copy.deepcopy(prog.dens_profile)
-    
+
     prog_m_max_init = prog_dp.M(prog_dp.rmax)
 
-    # We don't need this
-    # hc = prog.init_host_concentration
- 
     # Store the initial concentraiton for use in the mass loss routine
     init_pc = prog.concentration
     
     o = orbit(prog.xv)    
     xv     = o.xv 
+    prog_xv.append(xv)
+    # Store the initial acceleration
+    acceleration_phi.append(host_dp.Phi(xv[0],xv[2]))
+    acceleration_fgrav.append(host_dp.fgrav(xv[0],xv[2]))
     r      = np.sqrt(xv[0]**2+xv[2]**2)    
     r_init = r
 
@@ -709,12 +1134,16 @@ def evolve_orbit(host, prog ,tsteps=None,
         # The reversal is because tree level zero is the root of the tree, not the infall
         # time.
         levels_at_tstep = prog.level - (np.searchsorted(host_times_starting_from_initial_level,tsteps,side='right')-1)
+        # searchsorted right gives 0 for the last element, therefore return -1 in the final element in start_step_level.
+        levels_at_tstep[-1] += 1
 
     if cfg.Mres is None:
         mres_effective = 0
     else:
         mres_effective = cfg.Mres
-        
+
+    
+
     nsteps = len(tsteps)
     for istep in range(1,nsteps):    
         t  = tsteps[istep]
@@ -745,9 +1174,14 @@ def evolve_orbit(host, prog ,tsteps=None,
         if host.has_disk:
             host_disk_mass = host.disk_mass[start_step_level]
 
+        #host_dp_steps.append(host_dp)
+
         # Evolve the progenitor orbit based on the current mass
         # and host halo profile.
+<<<<<<< HEAD
 
+=======
+>>>>>>> main
         o.integrate(t, host_dp, prog_mass)
         
         # Note that the coordinates are updated 
@@ -755,6 +1189,7 @@ def evolve_orbit(host, prog ,tsteps=None,
         # the ".integrate" method, here we assign them to 
         # a new variable "xv" only for bookkeeping
         xv  = o.xv 
+<<<<<<< HEAD
         prog_coors.append(cyl_to_cart_position(xv))
         r   = np.sqrt(xv[0]**2+xv[2]**2)
         radii.append(r)
@@ -766,6 +1201,18 @@ def evolve_orbit(host, prog ,tsteps=None,
         j_circ = profile_j_circ(host_dp, r, mass=prog_mass)
         prog_circularity.append(j_tot/j_circ)
         
+=======
+        prog_xv.append(xv)
+        prog_coors.append(compute_coordinates(xv))
+        r   = np.sqrt(xv[0]**2+xv[2]**2)
+        radii.append(r)
+
+        # Save the accelerations
+        # There are two types of acceleration-ish functions...
+        acceleration_phi.append(host_dp.Phi(xv[0],xv[2]))
+        acceleration_fgrav.append(host_dp.fgrav(xv[0],xv[2]))
+
+>>>>>>> main
         if evolve_prog_mass:
             # Evolve the progenitor mass for dt in the current potential
             # Following SatGen (SatEvo), msub takes the initial potentials
@@ -774,7 +1221,8 @@ def evolve_orbit(host, prog ,tsteps=None,
             # SatGen requires the *initial* progenitor concentration and the
             # *instantaneous* host concentration
             alpha_strip = ev.alpha_from_c2(host_concentration,init_pc)
-
+            if alpha_shift is not None:
+                alpha_strip *= alpha_shift
             # prog_dp and host_dp are the instantaneous values, updated
             # for each step.
             prog_evolved_mass, prog_tidal_raidus = ev.msub(prog_dp,
@@ -783,7 +1231,6 @@ def evolve_orbit(host, prog ,tsteps=None,
                                                            dt,
                                                            choice='King62',
                                                            alpha=alpha_strip)
-            
             # Now update the potential of the satellite to the end of the step, after
             # mass loss. This update function claims to handle the resolution limit.
             prog_dp.update_mass(prog_evolved_mass)
@@ -807,7 +1254,24 @@ def evolve_orbit(host, prog ,tsteps=None,
             # This is calculated from int *initial* stellar mass,
             # not the current stellar mass!
             prog_mstar = float(prog_mstar_init * g_ms) 
-            
+
+            # Integrate stripped mass orbits
+            if integrate_strip:
+                # mstar changed
+                dprog_mstar = prog_mstar_init - prog_mstar
+                # mhalo changed
+                dprog_mass = prog_mass - prog_evolved_mass
+
+                # stripped point mass of star and dark matter
+                strip_star_coors,strip_tage = strip.integrate_stripped_point_mass(o,dprog_mstar,
+                                                   host.dens_profile,tsteps,istep,nsteps,
+                                                   levels_at_tstep,host.t_age[initial_level],potential='varying')
+                strip_halo_coors,_ = strip.integrate_stripped_point_mass(o,dprog_mass,host.dens_profile,tsteps,
+                                    istep,nsteps,levels_at_tstep,host.t_age[initial_level],potential='varying')
+                strip_star_list.append(strip_star_coors)
+                strip_halo_list.append(strip_halo_coors)
+                strip_tage_list.append(strip_tage)
+
             # Progenitor mass after mass loss
             prog_mass  = prog_evolved_mass
             
@@ -821,7 +1285,15 @@ def evolve_orbit(host, prog ,tsteps=None,
             prog_masses.append(prog_mass_init)
             prog_mstars.append(prog_mstar_init)
           
-    reshape_coors(prog_coors,len(tsteps))
+    prog_coors = reshape_to_tsteps_shape(np.array(prog_coors),len(tsteps))
+
+    prog_xv = np.array(prog_xv)
+    valid_prog_xv = valid_coors(prog_xv)
+    x, y, z, vx, vy, vz = cylindrical_to_cartesian_phase(
+    valid_prog_xv[:,0], valid_prog_xv[:,1], valid_prog_xv[:,2], valid_prog_xv[:,3],
+    valid_prog_xv[:,4], valid_prog_xv[:,5])
+    prog_pos_vel = np.array([x,y,z,vx,vy,vz]).T
+    prog_pos_vel = reshape_to_tsteps_shape(prog_pos_vel,len(tsteps),task='xv')
   
     # Return
     retdict = dict()
@@ -836,13 +1308,30 @@ def evolve_orbit(host, prog ,tsteps=None,
     retdict['tsteps']      = tsteps
     retdict['tage']        = host.t_age[initial_level] + tsteps
     retdict['prog_dp']     = prog_dp
+    #retdict['host_dp_steps']     = host_dp_steps
     retdict['levels_at_tsteps'] = levels_at_tstep
     retdict['host_times_starting_from_initial_level'] = host_times_starting_from_initial_level
     retdict['has_galaxy']  = prog.has_galaxy
-
+    retdict['prog_xv'] = prog_xv
+    retdict['prog_pos_vel'] = prog_pos_vel
     # Note that the orbit xvArray property contains the phase space coordinate at each 
     # timestep, but, since this this computed by SatGen internally, it does not include
     # the initial conditions or any steps below the resolution limit. TODO?
+<<<<<<< HEAD
     retdict['orbit'] = np.array(prog_coors)
     
+=======
+    retdict['coors'] = prog_coors
+    retdict['acc_phi'] = acceleration_phi
+    retdict['acc_fgrav'] = acceleration_fgrav
+
+    if integrate_strip:
+        retdict['strip_star'] = strip_star_list
+        retdict['strip_halo'] = strip_halo_list
+        retdict['strip_tage'] = strip_tage_list
+>>>>>>> main
     return retdict
+
+
+
+
