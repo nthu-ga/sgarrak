@@ -18,4 +18,4 @@ module load gcc/9.4.0 hdf5
 # All paths relative to executable
 # We use the pchtrees excutable in CWD; could be a symlink
 
-srun ./pchtrees --ntrees 1000 --mphalo 2.308463e11 --mmax 2.308463e12 --params ./pfop_satgen_1000_mixed_logmass.toml --no-output-trees --process-first-order-progenitors --loguniform
+srun ./pchtrees --ntrees 100 --mphalo 2.308463e11 --mmax 2.308463e12 --params ./pfop_satgen_1000_mixed_logmass.toml --no-output-trees --process-first-order-progenitors --loguniform

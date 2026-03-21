@@ -93,7 +93,7 @@ def process_tree(itree ,fd=0.0 ,flattening=25.,
     t_start = time()
     
     # SATGEN.cfg implicitly sets resolution limits on mass (absolute and relative) and radius
-    # Set them explicitly here; these are the degaults
+    # Set them explicitly here; these are the defaults
     cfg.Mres    = 100.0
     cfg.Rres    = 0.001
     cfg.psi_res = 1.0e-5
