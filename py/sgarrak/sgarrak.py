@@ -87,14 +87,12 @@ if not LUDLOW_C_PATH in sys.path:
     sys.path.append(LUDLOW_C_PATH)
 
 import ludlowc as llc
-reload(llc)
 
-SRC_PATH = '/data/chungwen/sgarrak'
-if not SRC_PATH in sys.path:
-    sys.path.append(SRC_PATH)
 
-import src.strip as strip
-reload(strip)
+PY_PATH = '/data/chungwen/sgarrak/py/sgarrak'
+if not PY_PATH in sys.path:
+    sys.path.append(PY_PATH)
+import strip as strip
 ############################################################
 def read_hdf5(path,datasets,group='/'):
     """
@@ -676,6 +674,7 @@ class Host():
             if walk_tree != 'backward':
                 self.disk_mass = self.disk_mass[::-1]
                 self.disk_reff = self.disk_reff[::-1]
+                self.scale_radius = self.scale_radius[::-1]
                 self.dens_profile = self.dens_profile[::-1]
                 self.halo_dens_profile = self.halo_dens_profile[::-1]
                 self.disk_dens_profile = self.disk_dens_profile[::-1]
@@ -998,7 +997,7 @@ def evolve_orbit(host, prog ,tsteps=None,
     prog_masses = [prog.mass_init]
     prog_mstars = [prog.mstar_init]
     prog_status = [STATUS_PROG_INTACT]
-    prog_coors  = [compute_coordinates(prog.xv)]    
+    prog_coors  = [compute_coordinates(prog.xv)]
     prog_xv = []
     acceleration_phi = []
     acceleration_fgrav = []
@@ -1011,6 +1010,7 @@ def evolve_orbit(host, prog ,tsteps=None,
         strip_star_list = []
         strip_halo_list = []
         strip_tage_list = []
+        strip_indices   = []
 
     # Working variables
     prog_mass  = prog_masses[0]
@@ -1182,6 +1182,7 @@ def evolve_orbit(host, prog ,tsteps=None,
                                                    levels_at_tstep,host.t_age[initial_level],potential='varying')
                 strip_halo_coors,_ = strip.integrate_stripped_point_mass(o,dprog_mass,host.dens_profile,tsteps,
                                     istep,nsteps,levels_at_tstep,host.t_age[initial_level],potential='varying')
+                strip_indices.append(istep)
                 strip_star_list.append(strip_star_coors)
                 strip_halo_list.append(strip_halo_coors)
                 strip_tage_list.append(strip_tage)
@@ -1238,6 +1239,7 @@ def evolve_orbit(host, prog ,tsteps=None,
         retdict['strip_star'] = strip_star_list
         retdict['strip_halo'] = strip_halo_list
         retdict['strip_tage'] = strip_tage_list
+        retdict['strip_index'] = np.array(strip_indices)
     return retdict
 
 

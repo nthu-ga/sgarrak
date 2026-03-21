@@ -35,14 +35,15 @@ if not PY_PATH in sys.path:
     sys.path.append(PY_PATH)
 
 import sgarrak as sga
-reload(sga)
-    
+import strip as strip
+
 LUDLOW_C_PATH = '/data/chungwen/cwt/ludlowc/ludlowc/py/ludlowc'
 if not LUDLOW_C_PATH in sys.path:
     sys.path.append(LUDLOW_C_PATH)
 
 import ludlowc as llc
-reload(llc)
+
+
 
 import numpy as np
 import os
@@ -483,6 +484,40 @@ def scale_radius_gao(m,z,h=0.73):
     A = -0.14*np.exp(-((la+0.05)/0.35)**2)
     B = 2.646*np.exp(-((la+0.0)/0.5)**2)
     return 0.1**(A*lgM+B)
+
+def surface_density_profile(r, m, r_bins):
+    """
+    Compute surface density profile Σ(R)
+
+    Parameters
+    ----------
+    r : array
+        Projected radii (kpc)
+    m : array
+        Particle masses (Msun)
+    r_bins : array
+        Radial bin edges (kpc)
+
+    Returns
+    -------
+    R_mid : array
+        Midpoint radius of bins (kpc)
+    Sigma : array
+        Surface density (Msun / kpc^2)
+    """
+    # Total mass in each radial bin
+    mass_in_bin, _ = np.histogram(r, bins=r_bins, weights=m)
+
+    # Area of each annulus
+    area = np.pi * (r_bins[1:]**2 - r_bins[:-1]**2)
+
+    # Surface density
+    Sigma = mass_in_bin / area
+
+    # Midpoint radius
+    R_mid = 0.5 * (r_bins[1:] + r_bins[:-1])
+
+    return R_mid, Sigma
 #########################################################
 ### Data arrangement
 def small_tickmarks(ax,minor_x,minor_y):
@@ -1186,6 +1221,81 @@ def plot_history_smhm(mains,models):
     pl.legend(frameon=False)
     return
 
+def plot_surface_density_profile(mass,coors,r_bins=None):
+    """
+    This uses the testing stripping function to represent the stripped mass distribution
+    """
+    rs,dms = strip.mass_distribution(mass,coors)
+    if r_bins == None:
+        # bin the radius within 300 kpc
+        r_bins = np.arange(0,300,50)
+    else:
+        r_bins = r_bins
+    
+    pl.figure()
+    r_mid,sigma = surface_density_profile(np.concatenate(rs),np.concatenate(dms),r_bins)
+    pl.plot(r_mid,sigma,r_bins,c='k',label='total')
+    for dm,r in zip(dms,rs):
+        r_mid,sigma = surface_density_profile(r,dm,r_bins)
+        pl.plot(r_mid,sigma,c='grey',alpha=0.5)
+    pl.xlabel(r'$\log_{10}\,R/\mathrm{kpc}$',fontsize=10)
+    pl.ylabel(r'$\log_{10}\,\Sigma_{\star}/\mathrm{M_{\odot}\,kpc^{-2}}$')
+    pl.legend()
+    return
+
+# ChatGPT
+def density_profile(r, m, nbins=50, rmin=None, rmax=None, logbins=True):
+    """
+    Compute spherically averaged density profile.
+
+    Parameters
+    ----------
+    r : array_like
+        Radii of particles (distance from center).
+    m : array_like
+        Particle masses.
+    nbins : int
+        Number of radial bins.
+    rmin, rmax : float
+        Radial range (optional).
+    logbins : bool
+        Use logarithmic bins if True.
+
+    Returns
+    -------
+    r_mid : array
+        Bin midpoints.
+    rho : array
+        Density in each shell.
+    """
+
+    r = np.asarray(r)
+    m = np.asarray(m)
+
+    if rmin is None:
+        rmin = r[r > 0].min()
+    if rmax is None:
+        rmax = r.max()
+
+    if logbins:
+        bins = np.logspace(np.log10(rmin), np.log10(rmax), nbins+1)
+    else:
+        bins = np.linspace(rmin, rmax, nbins+1)
+
+    # mass in each radial shell
+    mass_in_shell, edges = np.histogram(r, bins=bins, weights=m)
+
+    r_inner = edges[:-1]
+    r_outer = edges[1:]
+
+    shell_volume = (4.0/3.0) * np.pi * (r_outer**3 - r_inner**3)
+
+    rho = mass_in_shell / shell_volume
+    r_mid = 0.5 * (r_inner + r_outer)
+
+    pl.figure()
+    
+    return r_mid, rho
 #########################################################
 ### check
 ## This place check assumptions or models.
@@ -1471,7 +1581,9 @@ def plot_conc_and_rs_to_tage_smooth_zhao(itree):
     smooth_c = sga.smooth_c(mainbranch_mass[itree],tage,version='zhao')
     zhao_c   = sga.halo_mah_to_zhao_c_nfw(mainbranch_mass[itree],tage)
     ludlow_c = llc.ludlow_concentration(mainbranch_mass[itree],tree_redshift,cosmology)
-
+    print('Ludlow c[-10:-1]: ',ludlow_c[-10:-1])
+    print('Zhao c[-10:-1]: ',zhao_c[-10:-1])
+    print('Redshift[-10:-1]: ',tree_redshift[-10:-1])
     lgsmooth_c = np.log10(smooth_c)
     lgzhao_c   = np.log10(zhao_c)
     lgludlow_c = np.log10(ludlow_c)
@@ -1543,6 +1655,7 @@ def plot_conc_and_rs_to_tage_smooth_zhao(itree):
     pl.plot(tage,lgsmooth_c,c='k',label='smooth')
     pl.plot(tage,lgzhao_c,c='r',label='Zhao')
     pl.plot(tage,lgdmc,c='purple',label='DM14')
+    pl.plot(tage,lgludlow_c,c='blue',label='Ludlow')
 
     pl.xlabel('age (Gyr)',fontsize=15)
     pl.ylabel('$\mathrm{log_{10}\, c}$',fontsize=15)
@@ -1580,6 +1693,46 @@ def plot_scale_radius_tage(itree):
 
     ax1.set_xlabel('age (Gyr)',fontsize=15)
     
+    return
+
+def plot_flattening(itree):
+    """
+    Check various flattening (disk scale radius/disk scale height)
+    The default satgen uses flattening=25
+
+    disk_profile = MN(disk_mass,scale_radius,scale_height)
+    """
+    
+    tree_redshift,root_mass,progenitors,mainbranch_mass = read_tree()
+
+    mhalo = mainbranch_mass[itree]
+
+    host1 = sga.Host(mhalo,tree_redshift,cosmology,fd=0.1,flattening=25.,disk_method='EMERGE',
+            walk_tree='forward',cooling_threshold=False,z0_smhm=False,smhm='m18')
+
+    host2 = sga.Host(mhalo,tree_redshift,cosmology,fd=0.1,flattening=5.,disk_method='EMERGE',
+            walk_tree='forward',cooling_threshold=False,z0_smhm=False,smhm='m18')
+
+    host3 = sga.Host(mhalo,tree_redshift,cosmology,fd=0.1,flattening=45.,disk_method='EMERGE',
+            walk_tree='forward',cooling_threshold=False,z0_smhm=False,smhm='m18')
+
+
+    scale_radius1 = host1.scale_radius
+    scale_radius2 = host2.scale_radius
+    scale_radius3 = host3.scale_radius
+    print(scale_radius1[0],scale_radius2[0],scale_radius3[0])
+    lg_disk_mass1 = np.log10(host1.disk_mass)
+    lg_disk_mass2 = np.log10(host2.disk_mass)
+    lg_disk_mass3 = np.log10(host3.disk_mass)
+
+    pl.figure()
+    pl.plot(lg_disk_mass1,scale_radius1,label='flattening=25')
+    pl.plot(lg_disk_mass2,scale_radius1,label='flattening=5')
+    pl.plot(lg_disk_mass3,scale_radius3,label='flattening=45')
+
+    pl.xlabel('$\mathrm{log_{10}\,disk\,mass\,M_{\odot}}$')
+    pl.ylabel('scale radius')
+    pl.legend(frameon=False,prop={'size':10})
     return
 #########################################################
 ### debug

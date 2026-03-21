@@ -73,7 +73,8 @@ cfg.OL = 0.75
 cfg.s8 = 0.8
 cfg.ns = 1.
 
-###############################################
+######################################################
+###
 
 def post_integrate_stripped_time_varying_point_mass(mass,xv,host_dp,tage,status):
     """
@@ -141,6 +142,11 @@ def integrate_stripped_point_mass(orbit,dm,host_dp_list,tage,starting_istep,nste
 
           For the satgen/agama comparison, the nsteps is set to 10000. 
           It is impossible to do this in the loop for all dm.
+
+          It seems for no dynamical friction, the orbit can be integrated and give 
+          coordinates if dm=0. The stored coordinates has outer len=len(t)-1
+          But for the one with dynamical friction, the orbit will not be integrated.
+          The length will be len=len(t)-1-len(dm=0)
     """
     #print('dynamical friction check1: ',cfg.lnL_pref)
     # no dynamical friction
@@ -179,49 +185,33 @@ def integrate_stripped_point_mass(orbit,dm,host_dp_list,tage,starting_istep,nste
     return strip_coors,strip_tage
 
 
-def leapfrog_orbit(x0, v0, potential, dt, n_steps=100):
+def mass_distribution(mass,coors):
     """
-    x0 : initial position (kpc)
-    v0 : initial velocity (km/s)
-    dt : timestep (Gyr)
-    n_steps : number of steps
+    Distribute the stripped mass on the integrated orbit to get 
+    the density profile.
+    The amount of mass that deposit on the orbit is proportional 
+    to the time it spend at the location.
+
+    Parameters: mass: the array of stripped mass
+                coors: the coordinates of each stripped mass
+
+    Return:
     """
-    # Convert dt from Gyr to kpc/(km/s)
-    dt *= 1.0227  # 1 Gyr ≈ 1.0227 kpc/(km/s)
+    r = []
+    equal_dm = []
+    for i in len(mass):
+        r.append(np.linalg.norm(coors[i],axis=1))
+        # equal mass at each saved coordinates
+        dm = mass[i]/len(coors[i])
+        equal_dm.append(np.repeat(dm,len(r)))
+    #r = np.concatenate(r)
+    #equal_dm = np.concatenate(equal_dm)
 
-    x = np.array(x0, dtype=float)
-    v = np.array(v0, dtype=float)
+    return np.array(r),np.array(equal_dm)
 
-    traj = np.zeros((n_steps, 3))
-    vel  = np.zeros((n_steps, 3))
 
-    a = potential.acceleration(x)
-
-    for i in range(n_steps):
-        # Kick
-        v += 0.5 * a * dt
-
-        # Drift
-        x += v * dt
-
-        # Update acceleration
-        a = potential.acceleration(x)
-
-        # Kick
-        v += 0.5 * a * dt
-
-        traj[i] = x
-        vel[i] = v
-
-    return traj, vel
-
-# Plumer?
-def distribution_function():
-    """
-    Represent the paritcle distribution of satellites.
-    """
-
-    return
+######################################################
+### auxiliary functions
 
 def compute_coordinates(xv):
     """
