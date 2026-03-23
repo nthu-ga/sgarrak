@@ -182,8 +182,8 @@ def read_satgen(ver=3):
         data_path = dir_path+'reionoutput/'
 
         output_dataset_names = ['fd01','no','step_forward','step_backward']#,'interp_sm','interp']
-        satgen_dataset_names = ['coors','has_galaxy','itree','levels_at_tsteps','nprog',
-                                'prog_masses','prog_mstars','radii','status','t_proc','tage',
+        satgen_dataset_names = ['orbit','has_galaxy','itree','levels_at_tsteps','nprog',
+                                'prog_masses','prog_mstars','radii','circularity','status','t_proc','tage',
                                 'tree_idx','tsteps']
 
         for odn in output_dataset_names:
@@ -1099,7 +1099,7 @@ def plot_orbits(prog_no,prog_disk,models,task='survive_with_disk',candidate=None
     ax5 = pl.subplot(2,3,5)
     
     for pk,prog,color,l,pm in zip(picks,progs,colors,models,prog_masses):
-        coors = prog['coors'][pk]
+        coors = prog['orbit'][pk]
         coors = valid_coors(coors)
         X,Y,Z = coors[:,0],coors[:,1],coors[:,2]
         

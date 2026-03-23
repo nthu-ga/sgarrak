@@ -12,7 +12,8 @@ from astropy.table import Table
 
 import copy
 
-
+sys.path.append(os.path.abspath('../py/'))
+print(sys.path)
 import sgarrak as sga
 
 import argparse
@@ -106,20 +107,19 @@ def process_tree(itree ,fd=0.0 ,flattening=25.,
     #cfg.Mres    = 100.0
     #cfg.Rres    = 0.001
     #cfg.psi_res = 1.0e-5
-    
+
     nsteps = 200
 
     np.random.seed(42)
-    
     progs_this_tree   = np.flatnonzero(progenitors['TreeID'] == itree)
     nprogs_this_tree  = len(progs_this_tree)
     host_mass_history = tree_main_branch_masses[itree]
-    
+
     # Call the host object
     host = sga.Host(host_mass_history, tree_redshifts, cosmology,
                     fd=fd, flattening=flattening, output_zred=output_zred,
                     disk_method=disk_method,walk_tree=walk_tree)
-   
+
     # Define result keys once
     result_keys = [
         'prog_masses', 'prog_mstars', 'status', 'radii', 'tsteps', 'tage',
@@ -162,7 +162,7 @@ def process_tree(itree ,fd=0.0 ,flattening=25.,
  
     results['nprog'] = len(results['prog_masses'])
     results['itree']  = itree
-    
+
     t_end = time.time()
     
     tree_data = dict()
@@ -211,6 +211,7 @@ def main(args,client=None):
 
     print('{:d} trees, {:d} levels'.format(ntrees,nlev))
     
+
     # Read progenitor data (immediately deal with little h on masses)
     progenitor_dataset_names = ["HostMass","ProgenitorZred","ProgenitorMass","ProgenitorIlev","TreeID"]
     
@@ -234,6 +235,7 @@ def main(args,client=None):
                                    cosmology=cosmology,
                                    nprogs_max=args.nprogs,
                                    verbose=True)    
+
     print('Processing...')
     t_start = time.time()
    
