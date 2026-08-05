@@ -120,8 +120,6 @@ def process_tree(itree ,fd=0.0 ,flattening=25.,
 ###########################################################
 def process_stream(result,mass_contribution_cut,cut_method):
     """
-    Maybe it is better to get top indices first and remove this tree immediately if there is no contributer.
-    So it does not need to deal with empty arrays...
     """
     # Unpack require info
     orbit_object    = result['orbit_object']
@@ -235,7 +233,7 @@ if __name__ == '__main__':
         processing_ranges = [np.arange(0,ntrees_max)]
     else:
         ntrees_max = ntrees
-        processing_ranges = np.array([np.arange(0,20)+20*i for i in range(0,50)])
+        processing_ranges = np.array([np.arange(0,20)+20*i for i in range(0,49)])
     print('Running {:d} trees'.format(ntrees_max))
 
     params = dict()
@@ -259,8 +257,8 @@ if __name__ == '__main__':
     "top_iprog": np.int64,
     "prog_each_length": np.int64,
     "prog_start_index": np.int64,
-    "strip_each_length": np.int64,
-    "strip_start_index": np.int64,
+    #"strip_each_length": np.int64,
+    #"strip_start_index": np.int64,
     "sindex": np.int64,
     "star_coor": np.float64,
     "dm_coor": np.float64,

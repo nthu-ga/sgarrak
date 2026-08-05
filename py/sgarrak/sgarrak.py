@@ -81,9 +81,12 @@ import init
 cfg.h  = 0.73
 cfg.Om = 0.25
 cfg.Ob = 0.0465
-cfg.OL = 0.75 
+cfg.OL = 0.75
 cfg.s8 = 0.8
 cfg.ns = 1.
+# These are the default dynamical friction parameters
+cfg.lnL_type = 0
+cfg.lnL_pref = 0.75
 # I remember at some point we want to use this paramters, not the default.
 # cfg.lnL_type = 3
 # cfg.lnL_pref = 1
@@ -94,8 +97,17 @@ if not LUDLOW_C_PATH in sys.path:
 
 import ludlowc as llc
 
+# Set cosmology for colossus
+# SatGen use M200, but how about orther physical models we add like EMERGE?
+#COLOSSUS_PATH = '/data/chungwen/colossus/colossus'
+#if not COLOSSUS_PATH in sys.path:
+#    sys.path.append(COLOSSUS_PATH)
 
-import strip as strip
+#astropy_cosmo = cosmo.FlatLambdaCDM(hubble_parameter*100,0.25,Ob0=cfg.Ob)
+
+#from colossus.cosmology import cosmology
+#from colossus.halo import mass_defs
+
 ############################################################
 def read_hdf5(path,datasets,group='/'):
     """
@@ -395,7 +407,7 @@ def integrated_baryon_conversion_eff(zred,mass,h=0.7):
 ############################################################
 class Host():
     def __init__(self, mass, zred, cosmology, fd=0.0, flattening=0., disk_method='fd',
-                 output_zred=None, walk_tree='backward', smhm='m18',
+                 output_zred=None, walk_tree='backward', smhm='m18', concentration_method='ludlow',
                  cooling_threshold=False, z0_smhm=False):
         """
         
@@ -411,6 +423,7 @@ class Host():
         Note: When assigning a disk_method, fd needs to give a number other than 0.
         """
         self.cosmology = cosmology
+        #colossus_cosmo = cosmology.fromAstropy(self.cosmology, cfg.s8, cfg.ns, cosmo_name = 'my_cosmo')
 
         self.evolving_mass = is_iterable(mass)
 
@@ -423,7 +436,7 @@ class Host():
         else:
             mass = np.repeat(mass, len(zred))
             assert(output_zred is None)
-            
+
         self._tree_mass = np.atleast_1d(mass)
         self._tree_zred = np.atleast_1d(zred)
 
@@ -452,14 +465,14 @@ class Host():
                 self.nlev = len(self._tree_mass)
         else:
             self.nlev = 1
-            
+
         # Set the properties at output levels
         if self.interpolated:
             # These are the actual output t_ages, to which we interpolate
             self.zred  = self._output_zred
             self.t_age = self.cosmology.age(self._output_zred).value
             self.mass  = np.interp(self.t_age[::-1], self._tree_t_age[::-1], self._tree_mass[::-1])[::-1] 
-            
+
             self._tree_level_to_output_level = np.digitize(self._tree_t_age,self.t_age)
             self._output_level_to_tree_level = np.digitize(self.t_age,self._tree_t_age)
 
@@ -475,12 +488,22 @@ class Host():
         self.t_lbk = self.cosmology.lookback_time(self.zred).value       
         
         if self.evolving_mass:
-            self.concentration = halo_mah_to_zhao_c_nfw(self.mass, self.t_age)
-            #self.concentration = smooth_c(self.mass,self.t_age,version='zhao')
-            #self.concentration = llc.ludlow_concentration(self.mass,self.zred,self.cosmology)
+            if concentration_method=='zhao':
+                self.concentration = halo_mah_to_zhao_c_nfw(self.mass, self.t_age)
+            elif concentration_method=='smooth':
+                self.concentration = smooth_c(self.mass,self.t_age,version='zhao')
+            # Ludlow 2016
+            elif concentration_method=='ludlow':
+                self.concentration = llc.ludlow_concentration(self.mass,
+                                        np.where(self.zred <= 7, self.zred, 7),self.cosmology)
+            else:
+                raise ValueError(f"This concentration method '{concentration}' not support.")
         else:
             self.concentration = np.atleast_1d(init.concentration(self.mass[0], self.zred[0], choice='DM14'))
             
+        # Convert Mvir and Cvir to M200 and C200
+        # cww: Is is reasonable to Mvir to input ludlow concentration which is based on M200?
+        #self.mass, R200c, self.concentration = mass_defs.changeMassDefinition(self.mass, self.concentration, self.zred, 'vir', '200c')
 
         if disk_method in ('interp_zavg'):
             # Add a check for those disk_methods don't have forward method, so idx_iter does not accidentally
@@ -536,6 +559,7 @@ class Host():
             # idx_iter is the order in which stellar masses are computed
             idx_iter = range(self.nlev) if walk_tree == 'backward' else reversed(range(self.nlev))
             
+
             for i in idx_iter:
                 
                 mass_i = self.mass[i]
@@ -543,7 +567,7 @@ class Host():
                 z_i = self.zred[i]
                 
                 halo_profile = NFW(mass_i,conc_i,Delta=200.,z=z_i,sf=1.)
-
+                # 3D half-stellar-mass radius
                 Reff = gh.Reff(halo_profile.rh,conc_i) # Virial radius & concentration
                 scale_radius = 0.766421/(1.+1./flattening) * Reff
                 self.scale_radius.append(scale_radius)
@@ -643,7 +667,7 @@ class Host():
                         disk_mass = mod_Mstar(mass_i,h=0.73,z=z_i,choice=smhm)
                         self.disk_mass.append(disk_mass)
                     else:
-                        e = instant_baryon_conversion_eff(mass_i,z_i)
+                        e = instant_baryon_conversion_eff(mass_i,z_i,h=0.73)
                         t = self.t_age[i]
                         delta_t = t - self.t_age[i+1]
                         delta_disk_mass = mstar(delta_t,z_i,
@@ -673,6 +697,11 @@ class Host():
                 self.disk_dens_profile.append(disk_profile)
 
         else:
+            ## Debug test
+            # Create NFW object with array
+            #halo_profiles = NFW(self.mass,self.concentration,Delta=200.,z=self.zred,sf=1.)
+            #self.dens_profile = halo_profiles
+            #self.halo_dens_profile = halo_profiles
             for i in range(self.nlev):
                 halo_profile = NFW(self.mass[i],
                                    self.concentration[i],
@@ -682,6 +711,8 @@ class Host():
                 # The host and halo density profiles are identical in this case
                 self.dens_profile.append(halo_profile)
                 self.halo_dens_profile.append(halo_profile)
+
+        self.rs = [hhdp.rs for hhdp in self.halo_dens_profile]
 
         # Reverse the array for forward method, so no need to change other function.
         if disk_method in ('step', 'interp', 'interp_sm', 'EMERGE'):
@@ -749,7 +780,10 @@ class Progenitor():
         if cosmology is not None:
             self.cosmology = cosmology
         else:
-            cosmology = host.cosmology
+            self.cosmology = host.cosmology
+
+        #colossus_cosmo = cosmology.fromAstropy(self.cosmology, cfg.s8, cfg.ns, cosmo_name = 'my_cosmo')
+
 
         if level is not None:
             # The progenitor infall time is specified by a level (an index in the
@@ -780,15 +814,15 @@ class Progenitor():
 
             # Starting time for progenitor
             self.infall_t_lbk = cosmology.lookback_time(self.zred).value
-
         # Sanity check for interpolated host
         assert(self.zred <= self.host.zred.max())
         assert(self.zred >  self.host.zred.min())
 
         self.init_host_dens_profile = self.host.dens_profile[self.level]
         self.init_host_halo_dens_profile = self.host.halo_dens_profile[self.level]
-        
         self.init_host_concentration = self.host.concentration[self.level]
+        self.init_host_mass = self.host.mass[self.level]
+        self.init_host_rs = self.host.rs[self.level]
 
         if host.has_disk:
             self.init_disk_mass = self.host.disk_mass[self.level]
@@ -902,6 +936,9 @@ def halo_mah_to_zhao_c_nfw(mass, t_age_gyr):
     return np.array(h_c_nfw)
 
 def smooth_c(Mv,t,version='zhao'):
+    """
+    Setting 4% of the z=0 halo mass, as it gives a smoother concentration.
+    """
     if(version == 'vdb'):
         coeff1 = 3.40
         coeff2 = 6.5
@@ -1041,11 +1078,16 @@ def reshape_to_tsteps_shape(input_array, t_shape, task='coor'):
     return np.vstack([arr, pad_block])
 
 ############################################################
+def nfw_aux(x):
+    return np.log(1.+x) - x/(1.+x)
+
+def calculate_nfw_acc(M,r,rs,c):
+    return cfg.G*M/r**2*nfw_aux(r/rs)/nfw_aux(c)
+############################################################
 def evolve_orbit(host, prog ,tsteps=None, 
                  evolve_prog_mass=False, 
                  evolve_past_res_limits=False,
-                 alpha_shift=None,
-                 integrate_strip=False):
+                 alpha_shift=None):
     """
     tstep: timesteps measured forwards from the initial conditions at 
         infall. 
@@ -1067,20 +1109,13 @@ def evolve_orbit(host, prog ,tsteps=None,
     prog_mstars = [prog.mstar_init]
     prog_status = [STATUS_PROG_INTACT]
     prog_circularity = [prog.circularity_init]
-    prog_coors  = [compute_coordinates(prog.xv)]    
+    prog_coors  = [cyl_to_cart_position(prog.xv)]    
     prog_xv = []
-    acceleration_phi = []
     acceleration_fgrav = []
     has_galaxy  = [prog.has_galaxy]
 
     if host.has_disk:
         host_disk_masses = [prog.init_disk_mass]
-
-    if integrate_strip:
-        strip_star_list = []
-        strip_halo_list = []
-        strip_tage_list = []
-        strip_indices   = []
 
     # Working variables
     prog_mass  = prog_masses[0]
@@ -1093,6 +1128,8 @@ def evolve_orbit(host, prog ,tsteps=None,
     # Instead make copies.
     host_dp    = copy.deepcopy(prog.init_host_dens_profile)
     prog_dp    = copy.deepcopy(prog.dens_profile)
+    # For j_circ
+    host_halo_dp = copy.deepcopy(prog.init_host_halo_dens_profile)
 
     prog_m_max_init = prog_dp.M(prog_dp.rmax)
 
@@ -1100,16 +1137,26 @@ def evolve_orbit(host, prog ,tsteps=None,
     init_pc = prog.concentration
     
     o = orbit(prog.xv)    
+    o_copy = copy.deepcopy(o)
+    orbit_object_list = [o_copy]
     xv     = o.xv 
     prog_xv.append(xv)
+
     # Store the initial acceleration
-    acceleration_phi.append(host_dp.Phi(xv[0],xv[2]))
-    acceleration_fgrav.append(host_dp.fgrav(xv[0],xv[2]))
+    if host.has_disk:
+        halo_fgrav = host_dp[0].fgrav(xv[0],xv[2])
+        disk_fgrav = host_dp[1].fgrav(xv[0],xv[2])
+        fgrav = tuple(hf + df for hf, df in zip(halo_fgrav, disk_fgrav))
+        acceleration_fgrav.append(np.sqrt(fgrav[0]**2+fgrav[2]**2))
+    else:
+        fgrav = host_dp.fgrav(xv[0],xv[2])
+        acceleration_fgrav.append(np.sqrt(fgrav[0]**2+fgrav[2]**2))
+
     r      = np.sqrt(xv[0]**2+xv[2]**2)    
     r_init = r
 
     j_tot  = xv_to_j_tot(xv,prog_mass)
-    j_circ = profile_j_circ(host_dp, r, mass=prog_mass)
+    j_circ = profile_j_circ(host_halo_dp, r, mass=prog_mass)
     j_tot_init = j_tot
     j_circ_init = j_circ
 
@@ -1150,10 +1197,15 @@ def evolve_orbit(host, prog ,tsteps=None,
     else:
         mres_effective = cfg.Mres
 
-    
+    # This is for debugging
+    host_concentration = prog.init_host_concentration
+    host_mass = prog.init_host_mass
+    host_rs = prog.init_host_rs
+    nfw_acc = []
+    nfw_acc.append(calculate_nfw_acc(host_mass,r,host_rs,host_concentration))
 
     nsteps = len(tsteps)
-    for istep in range(1,nsteps):    
+    for istep in range(1,nsteps):
         t  = tsteps[istep]
         dt = t - tsteps[istep-1]
 
@@ -1170,15 +1222,26 @@ def evolve_orbit(host, prog ,tsteps=None,
                 prog_circularity.append(j_tot/j_circ)
                 prog_masses.append(prog_mass)
                 prog_mstars.append(prog_mstar)
+                nfw_acc.append(calculate_nfw_acc(host_mass,r,host_rs,host_concentration))
                 if host.has_disk:
                     host_disk_masses.append(host.disk_mass[start_step_level])
-                continue 
+                    halo_fgrav = host_dp[0].fgrav(xv[0],xv[2])
+                    disk_fgrav = host_dp[1].fgrav(xv[0],xv[2])
+                    fgrav = tuple(hf + df for hf, df in zip(halo_fgrav, disk_fgrav))
+                    acceleration_fgrav.append(np.sqrt(fgrav[0]**2+fgrav[2]**2))
+                else:
+                    fgrav = host_dp.fgrav(xv[0],xv[2])
+                    acceleration_fgrav.append(np.sqrt(fgrav[0]**2+fgrav[2]**2))
+
+                continue
         else:
             prog_status.append(STATUS_PROG_INTACT)
 
         # Update the host profile if needed
         host_dp = copy.deepcopy(host.dens_profile[start_step_level])
         host_concentration = host.concentration[start_step_level]
+        host_rs = host.rs[start_step_level] # Debug usage
+        host_mass = host.mass[start_step_level] # Debug usage
         if host.has_disk:
             host_disk_mass = host.disk_mass[start_step_level]
 
@@ -1187,15 +1250,16 @@ def evolve_orbit(host, prog ,tsteps=None,
         # Evolve the progenitor orbit based on the current mass
         # and host halo profile.
         o.integrate(t, host_dp, prog_mass)
-        
+        o_copy = copy.deepcopy(o)
+        orbit_object_list.append(o_copy)
         # Note that the coordinates are updated 
         # internally in the orbit instance "o" when calling
         # the ".integrate" method, here we assign them to 
         # a new variable "xv" only for bookkeeping
-        xv  = o.xv 
-        
+        xv  = o.xv
+
         prog_xv.append(xv)
-        prog_coors.append(compute_coordinates(xv))
+        prog_coors.append(cyl_to_cart_position(xv))
         r   = np.sqrt(xv[0]**2+xv[2]**2)
         radii.append(r)
 
@@ -1204,13 +1268,20 @@ def evolve_orbit(host, prog ,tsteps=None,
         # - computing before mass update, ok?
         # - dp includes disk or not?
         j_tot  = xv_to_j_tot(xv,mass=prog_mass)
-        j_circ = profile_j_circ(host_dp, r, mass=prog_mass)
+        j_circ = profile_j_circ(host_halo_dp, r, mass=prog_mass)
         prog_circularity.append(j_tot/j_circ)
- 
+
         # Save the accelerations
-        # There are two types of acceleration-ish functions...
-        acceleration_phi.append(host_dp.Phi(xv[0],xv[2]))
-        acceleration_fgrav.append(host_dp.fgrav(xv[0],xv[2]))
+        nfw_acc.append(calculate_nfw_acc(host_mass,r,host_rs,host_concentration)) # Debug usage
+        # There are two types of acceleration-ish functions (phi & fgrav)
+        if host.has_disk:
+            halo_fgrav = host_dp[0].fgrav(xv[0],xv[2])
+            disk_fgrav = host_dp[1].fgrav(xv[0],xv[2])
+            fgrav = tuple(hf + df for hf, df in zip(halo_fgrav, disk_fgrav))
+            acceleration_fgrav.append(np.sqrt(fgrav[0]**2+fgrav[2]**2))
+        else:
+            fgrav = host_dp.fgrav(xv[0],xv[2])
+            acceleration_fgrav.append(np.sqrt(fgrav[0]**2+fgrav[2]**2))
 
         if evolve_prog_mass:
             # Evolve the progenitor mass for dt in the current potential
@@ -1239,11 +1310,11 @@ def evolve_orbit(host, prog ,tsteps=None,
             # This is done in terms of the ratio of mass within r_max *now* to the
             # mass within r_max *at infall*.
             prog_m_max = prog_dp.M(prog_dp.rmax)
-            
+
             # Alpha and leff/lmax here are a little subtle...
-            g_le, g_ms = ev.g_EPW18(prog_m_max/prog_m_max_init, 
-                                    alpha=1., 
-                                    lefflmax=0.1) 
+            g_le, g_ms = ev.g_EPW18(prog_m_max/prog_m_max_init,
+                                    alpha=1.,
+                                    lefflmax=0.1)
             
             # APC: g_le and g_ms are arrays
             g_le = g_le[0][0]
@@ -1252,25 +1323,7 @@ def evolve_orbit(host, prog ,tsteps=None,
             # Stellar mass after tidal stripping
             # This is calculated from int *initial* stellar mass,
             # not the current stellar mass!
-            prog_mstar = float(prog_mstar_init * g_ms) 
-
-            # Integrate stripped mass orbits
-            if integrate_strip:
-                # mstar changed
-                dprog_mstar = prog_mstar_init - prog_mstar
-                # mhalo changed
-                dprog_mass = prog_mass - prog_evolved_mass
-
-                # stripped point mass of star and dark matter
-                strip_star_coors,strip_tage = strip.integrate_stripped_point_mass(o,dprog_mstar,
-                                                   host.dens_profile,tsteps,istep,nsteps,
-                                                   levels_at_tstep,host.t_age[initial_level],potential='varying')
-                strip_halo_coors,_ = strip.integrate_stripped_point_mass(o,dprog_mass,host.dens_profile,tsteps,
-                                    istep,nsteps,levels_at_tstep,host.t_age[initial_level],potential='varying')
-                strip_indices.append(istep)
-                strip_star_list.append(strip_star_coors)
-                strip_halo_list.append(strip_halo_coors)
-                strip_tage_list.append(strip_tage)
+            prog_mstar = float(prog_mstar_init * g_ms)
 
             # Progenitor mass after mass loss
             prog_mass  = prog_evolved_mass
@@ -1303,12 +1356,12 @@ def evolve_orbit(host, prog ,tsteps=None,
     retdict['status']      = np.array(prog_status) 
     if host.has_disk:
         retdict['host_disk_masses'] = np.array(host_disk_masses)
+        retdict['scale_raidus'] = np.array(host.scale_radius)
     retdict['radii']       = np.array(radii)
     retdict['circularity'] = np.array(prog_circularity)
     retdict['tsteps']      = tsteps
     retdict['tage']        = host.t_age[initial_level] + tsteps
     retdict['prog_dp']     = prog_dp
-    #retdict['host_dp_steps']     = host_dp_steps
     retdict['levels_at_tsteps'] = levels_at_tstep
     retdict['host_times_starting_from_initial_level'] = host_times_starting_from_initial_level
     retdict['has_galaxy']  = prog.has_galaxy
@@ -1317,14 +1370,13 @@ def evolve_orbit(host, prog ,tsteps=None,
     # Note that the orbit xvArray property contains the phase space coordinate at each 
     # timestep, but, since this this computed by SatGen internally, it does not include
     # the initial conditions or any steps below the resolution limit. TODO?
-    
-    retdict['orbit'] = np.array(prog_coors)
-    retdict['acc_phi'] = acceleration_phi
-    retdict['acc_fgrav'] = acceleration_fgrav
 
-    if integrate_strip:
-        retdict['strip_star'] = strip_star_list
-        retdict['strip_halo'] = strip_halo_list
-        retdict['strip_tage'] = strip_tage_list
-        retdict['strip_index'] = np.array(strip_indices)
+    # Storing data for Agama check
+    retdict['orbit'] = np.array(prog_coors)
+    retdict['acc_fgrav'] = np.asarray(acceleration_fgrav)
+    retdict['nfw_acc'] = np.asarray(nfw_acc)
+
+    # Storing data for stripping method
+    retdict['orbit_object'] = orbit_object_list
+    retdict['host_dp']  = host.dens_profile
     return retdict

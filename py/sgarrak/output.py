@@ -44,20 +44,42 @@ if not LUDLOW_C_PATH in sys.path:
 import ludlowc as llc
 
 
+sys.path.append('/data/apcooper/sfw/hdf5_tools/py/')
+sys.path.append('/data/apcooper/sfw/apcpy3/py/')
+sys.path.append('/data/apcooper/sfw/stings/py/')
+sys.path.append('/data/apcooper/sfw/coco/py/')
+
+import coco.system as COCO
+import coco.runmanager as runmanager
+import coco.density
+import coco.astrophysics
+reload(COCO)
+reload(runmanager)
+reload(coco.density)
+reload(coco.astrophysics)
+l153pc = runmanager.CocoRun('cdm','lacey15','3pc','trees_mmax_vmax')
+l153pc.load_standard_tables()
+
+density_profiles = coco.density.DensityProfiles(l153pc)
+
+galaxies = coco.runmanager.GalaxySet(l153pc)
 
 import numpy as np
 import os
 import time
 
+np.bool = bool # This is a quick fix for galaxies.subset
 import hmf
 from hmf import MassFunction
 
 import astropy.cosmology as cosmo
 
+from astropy.io import fits
 from astropy.table import Table
 from functools import partial
 import tables as tb
 from scipy.interpolate import interp1d
+from scipy.integrate import quad
 
 # <<< for clean on-screen prints, use with caution, make sure that 
 # the warning is not prevalent or essential for the result
@@ -74,6 +96,8 @@ import aux
 import init
 
 import matplotlib.pyplot as pl
+from matplotlib import cm
+import matplotlib.colors as mcolors
 
 # Millennium
 hubble_parameter = 0.73
@@ -109,6 +133,10 @@ def read_b18():
 def read_tree(tree_setup='default'):
     """
     pchtrees output files
+
+    Parameters
+    ----------
+    tree_setup: different mass ranges
     """
 
     # Millennium
@@ -148,20 +176,23 @@ def read_satgen(ver=3):
     """
     Satgen output files
 
-    Data sets: fddisk: Use the fd=0.1 to get the disk mass
-               nodisk: No disk
-               interpdisk: Use the z=0 B13 SMHM relation to get the disk mass,
+    Recipies
+    --------
+    disk: fd=0/fd/EMERGE/interp/interp_sm/step
+    fd=0: No disk
+    interp: Use the z=0 B13 SMHM relation to get the disk mass,
                            and rescale to the earlier halo mass
-    
+    Runs
+    ----
+    reionization/EMERGE/ludlow, status: 2026/4/26 updated
+
     ver: lessoutput: Contains only initial and final outputs
-         ver2: 
-         ver3: Adds main branch infomation
+    ver2:
+    ver3: Adds main branch infomation
 
     Notes: host_disk_mass arrays not fixed in ver2 and ver3. 
            The disk masses of hosts are recorded in MainBranches instead.
 
-    TODO: Is there an way to control which file will load first 
-          when using os.listdir or glob.glob?
     """
 
     dir_path = '/data/chungwen/sgarrak/runs/1000_mixed_logmass/'
@@ -312,15 +343,19 @@ def compute_mass(prog,root_mass,task='m_acc',ntrees=1000,reionization=False):
                       m_total: total satellite mstar
                       
     """
-    final_status = prog['status'][:,-1]    
+    final_status = prog['status'][:,-1]
     initial_mass = prog['prog_masses'][:,0]
     initial_mstar = prog['prog_mstars'][:,0]
     final_mstar = prog['prog_mstars'][:,-1]
     final_mass = prog['prog_masses'][:,-1]
 
     survives = final_status == 0
-    tree_idx = prog['tree_idx']
-    has_galaxy = prog['has_galaxy'] == 1
+    tree_idx = []
+    for itree,nprog in zip(prog['itree'],prog['nprog']):
+        tree_idx.append(np.repeat(itree,nprog))
+    tree_idx = np.concatenate(tree_idx)
+    # Current has_galaxy is only a tag, progenitors still form galaxies depending on smhm.
+    has_galaxy = True #prog['has_galaxy'] == 1
 
     mass_arr = np.zeros(ntrees)
 
@@ -427,7 +462,6 @@ def avg_smhm(n,return_edge=False):
     return f
 
 
-# ChatGPT
 def first_pericenter_distance(r):
     """
     Compute the first pericenter distance for a particle spiraling into the origin.
@@ -485,14 +519,39 @@ def scale_radius_gao(m,z,h=0.73):
     B = 2.646*np.exp(-((la+0.0)/0.5)**2)
     return 0.1**(A*lgM+B)
 
-def surface_density_profile(r, m, r_bins):
-    """
-    Compute surface density profile Σ(R)
 
+## mass distribution for the strip particles
+# maybe there will be more method for distributing mass in the future
+def mass_distribution(star_coor,dmstar):
+    """
+    Distribute the stripped mass on the integrated orbit to get
+    the density profile
+    The amount of mass that deposit on the orbit is proportional
+    to the time it spend at the location
+
+    Parameters: dmstar: the array of stripped mass at each step
+                star_coor: the coordinates of each stripped mass at each step
+
+    Return: A list of arrays that assigns equal masses at all the positions
+    """
+
+    equal_dm = []
+    for i in np.arange(0,len(dmstar)):
+
+        # equal mass at each saved coordinates
+        dm = dmstar[i]/len(star_coor[i])
+        equal_dm.append(np.repeat(dm,len(star_coor[i])))
+
+    return np.concatenate(equal_dm)
+
+def surface_density_profile(star_coor_list,dmstar_list, r_bins, axis='xy'):
+    """
+    Compute 2-D surface density profile Σ(R)
+    
     Parameters
     ----------
-    r : array
-        Projected radii (kpc)
+    coor : array
+        3-D coordinates (kpc)
     m : array
         Particle masses (Msun)
     r_bins : array
@@ -505,19 +564,106 @@ def surface_density_profile(r, m, r_bins):
     Sigma : array
         Surface density (Msun / kpc^2)
     """
-    # Total mass in each radial bin
-    mass_in_bin, _ = np.histogram(r, bins=r_bins, weights=m)
+    nprog = len(dmstar_list)
+    #print('check nprog: ',nprog)
+    mass_in_bin_each = []
+    for i in range(nprog):
+        star_coor = star_coor_list[i]
+        dmstar    = dmstar_list[i]
+        sc = np.concatenate(star_coor)
+        if axis=='xy':
+            r = np.sqrt(sc[:,0]**2+sc[:,1]**2)
+        elif axis=='xz':
+            r = np.sqrt(sc[:,0]**2+sc[:,2]**2)
+        elif axis=='yz':
+            r = np.sqrt(sc[:,1]**2+sc[:,2]**2)
 
+        m = mass_distribution(star_coor,dmstar)
+        lgr = np.log10(r)
+        
+        # Total mass in each radial bin
+        mass_in_bin, _ = np.histogram(lgr, bins=r_bins, weights=m)
+
+        mass_in_bin_each.append(mass_in_bin)
+        
+    mass_in_bin_tot = np.sum(mass_in_bin_each,axis=0)
+    #print(sum(mass_in_bin_tot))
     # Area of each annulus
-    area = np.pi * (r_bins[1:]**2 - r_bins[:-1]**2)
-
+    area = np.pi * ((10**r_bins[1:])**2 - (10**r_bins[:-1])**2)
+    
     # Surface density
-    Sigma = mass_in_bin / area
-
+    Sigma = mass_in_bin_tot / area
+    Sigma_each = mass_in_bin_each / area
+    #print(Sigma,sum(Sigma))
     # Midpoint radius
     R_mid = 0.5 * (r_bins[1:] + r_bins[:-1])
 
-    return R_mid, Sigma
+    return R_mid, Sigma, Sigma_each
+
+## Calculate the mass of MN disk within a cylindrical annuli.
+def rho_MN(R, z, Md, a, b):
+    """
+    Miyamoto-Nagai density [Msun/kpc^3].
+    R, z, a, b in kpc; Md in Msun.
+    """
+    x = np.sqrt(z**2 + b**2)
+
+    numerator = (
+        a * R**2
+        + (a + 3*x) * (a + x)**2
+    )
+
+    denominator = (
+        x**3
+        * (R**2 + (a + x)**2)**2.5
+    )
+
+    return (b**2 * Md / (4*np.pi)) * numerator / denominator
+
+def Sigma_faceon(R, Md, a, b):
+    """
+    Face-on projected surface density Sigma(R) [Msun/kpc^2].
+    2 * (integration 0 -> inf)
+    """
+    # density is symmetric in z
+    val, err = quad(
+        lambda z: rho_MN(R, z, Md, a, b),
+        0,
+        np.inf,
+        epsabs=0, # ignore absolute error target
+        epsrel=1e-6, # integrate until |error| <= epsrel * |val|
+        limit=200 # maximum number of subinterval
+    )
+
+    return 2 * val
+
+
+def M_annulus_faceon(R1, R2, Md, a, b):
+    """
+    Projected face-on mass inside cylindrical annulus R1 < R < R2.
+    """
+    val, err = quad(
+        lambda R: 2*np.pi * R * Sigma_faceon(R, Md, a, b),
+        R1,
+        R2,
+        epsabs=0,
+        epsrel=1e-5,
+        limit=100
+    )
+
+    return val
+
+def disk_scale_radius_height(reff):
+    """
+    """
+    flattening = 25.
+    scale_radius = 0.766421/(1.+1./flattening) * reff
+    scale_height = scale_radius / flattening
+    return scale_radius,scale_height
+
+def sigma_exponential_mass_normalized(R, Md, Rd):
+    Sigma0 = Md / (2 * np.pi * Rd**2)
+    return Sigma0 * np.exp(-R / Rd)
 #########################################################
 ### Data arrangement
 def small_tickmarks(ax,minor_x,minor_y):
@@ -578,10 +724,10 @@ def valid_coors(coors):
     [-1,-1,-1] coordinates were fiiled in when a progenitor was 
     below the cfg resolution to keep the arrays having the same shape.
     """
-    
+
     mask = ~(np.all(coors == -1, axis=1))
     coors_valid = coors[mask]
-    
+
     return coors_valid
 
 def dict_comprehensive(d,mask,inhomogenious=True):
@@ -601,8 +747,166 @@ def dict_comprehensive(d,mask,inhomogenious=True):
                 d_filtered[k] = v
     else:
         d_filtered = {k:v[mask] for k,v in d.items()}
-    
+
     return d_filtered
+
+## regroup the results and streams with indices for the strips
+def rebuild_top_indices(top_indices):
+    """
+    out[itree]
+    """
+
+    top_indices = np.asarray(top_indices)
+    return
+
+def rebuild_dmstar_coor(dmstar_coor, strip_each_length, strip_start_index, prog_start_index):
+    """
+    Rebuild nested structure:
+        out[itree][iprog][istrip] -> ndarray of shape (Nstrip, 3)
+
+    Parameters
+    ----------
+    dmstar_coor : ndarray, shape (N, 3)
+        Fully concatenated coordinate array.
+    strip_each_length : ndarray, shape (Nstrip,)
+        Number of rows in each strip.
+    strip_start_index : ndarray, shape (Nstrip,)
+        Resets to 0 when a new prog starts.
+    prog_start_index : ndarray, shape (Nprog,)
+        Resets to 0 when a new tree starts.
+
+    Returns
+    -------
+    out : list[list[list[np.ndarray]]]
+    """
+    dmstar_coor       = np.asarray(dmstar_coor)
+    strip_each_length = np.asarray(strip_each_length)
+    strip_start_index = np.asarray(strip_start_index)
+    prog_start_index  = np.asarray(prog_start_index)
+
+    assert np.sum(strip_each_length) == len(dmstar_coor)
+
+    # global offsets into dmstar_coor for each strip
+    strip_offsets = np.r_[0, np.cumsum(strip_each_length)]
+
+    # strip indices where a new prog starts
+    prog_breaks = np.r_[np.where(strip_start_index == 0)[0], len(strip_each_length)]
+
+    # prog indices where a new tree starts
+    tree_breaks = np.r_[np.where(prog_start_index == 0)[0], len(prog_start_index)]
+
+    # number of progs inferred from strip data should match prog metadata
+    assert len(prog_breaks) - 1 == len(prog_start_index)
+
+    out = []
+    for itree in range(len(tree_breaks) - 1):
+        p0, p1 = tree_breaks[itree], tree_breaks[itree + 1]
+
+        tree_list = []
+        for iprog in range(p0, p1):
+            s0, s1 = prog_breaks[iprog], prog_breaks[iprog + 1]
+
+            prog_list = []
+            for istrip in range(s0, s1):
+                prog_list.append(dmstar_coor[strip_offsets[istrip]:strip_offsets[istrip + 1]])
+
+            tree_list.append(prog_list)
+
+        out.append(tree_list)
+
+    return out
+
+def rebuild_dmstar(dmstar, prog_each_length, prog_start_index):
+    """
+    Rebuild nested structure new_dmstar[itree][iprog] from concatenated prog-level data.
+
+    Parameters
+    ----------
+    dmstar : ndarray, shape (N,)
+        Concatenated 1-D data.
+    prog_each_length : ndarray, shape (Nprog,)
+        Length of each prog block in dmstar.
+    prog_start_index : ndarray, shape (Nprog,)
+        Start index within each tree. Resets to 0 for each new tree.
+
+    Returns
+    -------
+    new_dmstar : list[list[np.ndarray]]
+        new_dmstar[itree][iprog]
+    """
+    dmstar = np.asarray(dmstar)
+    prog_each_length = np.asarray(prog_each_length)
+    prog_start_index = np.asarray(prog_start_index)
+
+    # Global offsets of each prog block in dmstar
+    prog_offsets = np.concatenate(([0], np.cumsum(prog_each_length)))
+
+    # Prog indices where a new tree starts
+    tree_breaks = np.where(prog_start_index == 0)[0]
+    tree_breaks = np.append(tree_breaks, len(prog_each_length))
+
+    new_dmstar = []
+
+    for itree in range(len(tree_breaks) - 1):
+        p0 = tree_breaks[itree]
+        p1 = tree_breaks[itree + 1]
+
+        tree_list = []
+        for iprog in range(p0, p1):
+            tree_list.append(dmstar[prog_offsets[iprog]:prog_offsets[iprog + 1]])
+
+        new_dmstar.append(tree_list)
+
+    return new_dmstar
+
+def regroup_data(stream):
+    """
+    Rebuild strip masses and strip orbits data from starting indices and length
+    """
+    star_coor = stream['star_coor']
+    dmstar    = stream['dmstar']
+    prog_start_index  = stream['prog_start_index']
+    prog_each_length  = stream['prog_each_length']
+    strip_each_length = stream['strip_each_length']
+    strip_start_index = stream['strip_start_index']
+
+    tree_start_index = np.where(prog_start_index == 0)[0]
+    tree_each_length = np.diff(np.append(tree_start_index, len(prog_start_index)))
+
+    new_dmstar = rebuild_dmstar(dmstar, prog_each_length, prog_start_index)
+    new_dmstar_coor = rebuild_dmstar_coor(star_coor, strip_each_length, strip_start_index, prog_start_index)
+
+    return new_dmstar,new_dmstar_coor
+
+def regroup_result(prog):
+    """
+    Rebuild results to have itree layers.
+    """
+    prog_mhalo = prog['prog_masses']
+    prog_mstar = prog['prog_mstars']
+    prog_tage  = prog['tage']
+    nprog = prog['nprog']
+
+    start_index = 0
+    re_prog_mhalo = []
+    re_prog_mstar = []
+    re_prog_tage  = []
+    for n in nprog:
+        re_prog_mhalo.append(prog_mhalo[start_index:start_index+n])
+        re_prog_mstar.append(prog_mstar[start_index:start_index+n])
+        re_prog_tage.append(prog_tage[start_index:start_index+n])
+        start_index += n
+    return re_prog_mhalo,re_prog_mstar,re_prog_tage
+
+def regroup_result_main(main):
+    main_disk = main['main_branch_disk_mass']
+    main_reff = main['main_branch_disk_reff']
+    remain_disk = []
+    remain_reff = []
+    for i in range(1000):
+        remain_disk.append(main_disk[i:i+132])
+        remain_reff.append(main_reff[i:i+132])
+    return remain_disk,remain_reff
 #########################################################
 ### Plot functions
 def larger_ticks(ax=None):
@@ -739,7 +1043,7 @@ def plot_m18(ax,h=0.6781,edges=False,omega_0=0.25,**kwargs):
 
     ax.fill_between(xx,y1,y2,color=kwargs.get('c','c'),
                 zorder=kwargs.get('zorder',-20),
-                alpha=kwargs.get('alpha',0.2),label='Moster+ (2018)')  
+                alpha=kwargs.get('alpha',0.2),label='Moster+ (2018)')
     return
 
 def plot_dw_2020_cmf(ax,label=None):
@@ -1157,7 +1461,7 @@ def plot_orbits(prog_no,prog_disk,models,task='survive_with_disk',candidate=None
 def plot_history(mains,models,halo_mass=False):
     """
     Check the mainbranch histories that have step jumps for the step_forward method
-    
+
     Parameters: halo_mass: If true, plot the sm to z and it's hm to z.
                            If false, plot the sm to z for the two different model.
     """
@@ -1173,7 +1477,7 @@ def plot_history(mains,models,halo_mass=False):
     b13sm_err = b13sm1sigma-b13sm50
 
     fig = pl.figure(figsize=(8,6))
-    
+
     if halo_mass:
         main = mains[0]
         dm = main['main_branch_disk_mass']
@@ -1193,7 +1497,7 @@ def plot_history(mains,models,halo_mass=False):
             #print(np.log10(mid_dm))
 
     # Satgen built-in sm scatter is 0.2 in log
-    pl.errorbar(np.log10(1+z),b13sm50,yerr=b13sm_err,c='k',alpha=0.5) 
+    pl.errorbar(np.log10(1+z),b13sm50,yerr=b13sm_err,c='k',alpha=0.5)
     for zz in z:
         pl.axvline(np.log10(1+zz),c='grey',alpha=0.2,lw=1,ls='--')
     return
@@ -1221,81 +1525,687 @@ def plot_history_smhm(mains,models):
     pl.legend(frameon=False)
     return
 
-def plot_surface_density_profile(mass,coors,r_bins=None):
+def plot_coco(ax,style='individual',bin_method='stellar'):
+    is_central = galaxies.is_dhalo_central
+
+    MW_LOG_MSTAR_LO = np.log10(5.7e10 - 1.1e10)
+    MW_LOG_MSTAR_HI = np.log10(5.7e10 + 1.5e10)
+
+    is_mw_by_mstar = (np.log10(galaxies.mstar) >= MW_LOG_MSTAR_LO) & \
+                    (np.log10(galaxies.mstar) <  MW_LOG_MSTAR_HI) & \
+                    galaxies.is_dhalo_central
+
+    galaxies_mw = galaxies.subset(is_mw_by_mstar)
+
+    # For a single mass bin
+    lmbins = np.array([11.8,12.2])
+
+    if style=='individual':
+        median_profiles_all      = coco.density.AverageDensityProfiles(density_profiles,galaxies,lmbins,minimum_mstar=1e5)
+        median_profiles_mw_mstar = coco.density.AverageDensityProfiles(density_profiles,galaxies_mw,lmbins,minimum_mstar=1e5)
+
+        lmbins_wide = np.array([0,15])
+        median_profiles_mw_wide = coco.density.AverageDensityProfiles(density_profiles,galaxies_mw,lmbins_wide,minimum_mstar=1e5)
+
+        for ibin in range(median_profiles_all.n_mass_bins):
+            xmed,ymed = median_profiles_all.all.median[ibin]
+            ax.plot(xmed, ymed, c='k',label='Halo mass only');
+
+            xmed,ymed = median_profiles_mw_mstar.all.median[ibin]
+            ax.plot(xmed, ymed, c='k',ls='--',label='Halo mass & MW mstar');
+
+            xmed,ymed = median_profiles_mw_wide.all.median[ibin]
+            ax.plot(xmed, ymed, c='k',ls=':',label='MW mstar only',lw=3);
+
+            for idx in np.flatnonzero(is_mw_by_mstar):
+                x = np.log10(density_profiles.dp_bins[idx][:-1]) + 3.0
+                y = np.log10(density_profiles.all_all_2d[idx,0]) - 6.0
+                ax.plot(x, y, c='grey', lw=0.5,alpha=1,zorder=20)
+
+    elif style=='median':
+        if bin_method=='stellar':
+            lmbins = np.array([8.5,10.6])
+            line_style = 'solid'
+        else:
+            lmbins = np.array([11.4,12.4])
+            line_style = 'dotted'
+        median_profiles = coco.density.AverageDensityProfiles(density_profiles,galaxies,lmbins,bin_by_mass=bin_method)
+
+        for ibin in range(median_profiles.n_mass_bins):
+            xmed,ymed = median_profiles.acc.median[ibin]
+            xup,yup = median_profiles.acc.up[ibin]
+            xlp,ylp = median_profiles.acc.lp[ibin]
+            ax.plot(xmed, ymed, c='cyan', label='COCO accreted',lw=2,ls=line_style)
+            ax.fill_between(xlp,ylp,yup,lw=0,color='cyan',alpha=0.2)
+
+            xmed,ymed = median_profiles.ins.median[ibin]
+            xup,yup = median_profiles.ins.up[ibin]
+            xlp,ylp = median_profiles.ins.lp[ibin]
+            ax.plot(xmed, ymed, c='red', label='COCO in-situ',lw=2,ls=line_style)
+            ax.fill_between(xlp,ylp,yup,lw=0,color='red',alpha=0.2)
+    else:
+        raise Exception
+
+    return
+
+def plot_surface_density_profile_with_coco(star_coor_list,dmstar_list,itree_stream,
+                                          disk_mass,disk_reff,
+                                          r_bins=None,include_disk=False,disk='MN',
+                                          task='plot_accreted',hmrange='MW'):
+    """
+    Remove later: include_disk is not used
+    """
+    nprofile = len(star_coor_list)
+
+    if r_bins == None:
+        # bin the radius within 1000 kpc
+        r_bins = np.linspace(np.log10(0.1), np.log10(1000),30)
+    else:
+        r_bins = r_bins
+    r_mid = 0.5 * (r_bins[1:] + r_bins[:-1])
+    R_mid = 10**r_mid
+
+    planes=['xy','xz','yz']
+    sigma_total = []
+    sigma_disk_only = []
+
+    for itree in range(nprofile):
+
+        if include_disk:
+            tree_idx = np.where(itree_stream == itree)[0]
+            z0_disk_mass_this_tree = disk_mass[tree_idx][0] # This [0] is weird coding, maybe I changed the data shape before.
+            z0_disk_reff_this_tree = disk_reff[tree_idx][0]
+
+            z0_disk_scale_radius, z0_disk_scale_height = disk_scale_radius_height(
+                z0_disk_reff_this_tree
+            )
+            if disk=='MN':
+                sigma_disk_total = np.array([
+                    Sigma_faceon(r, z0_disk_mass_this_tree,
+                                z0_disk_scale_radius,
+                                z0_disk_scale_height)
+                                for r in R_mid])
+            elif disk=='exponential':
+                sigma_disk_total = np.array([
+                    sigma_exponential_mass_normalized(r, z0_disk_mass_this_tree,
+                                                     z0_disk_scale_radius)
+                                            for r in R_mid])
+            sigma_disk_only.append(sigma_disk_total)
+
+        sigma_proj_total = []
+
+        for i in range(3):
+            _, sigma, _ = surface_density_profile(
+                star_coor_list[itree],
+                dmstar_list[itree],
+                r_bins,
+                axis=planes[i]
+            )
+            sigma_proj_total.append(np.asarray(sigma))
+
+        # This should not return nan
+        assert(not np.any(np.isnan(sigma_proj_total)))
+
+        sigma_proj_mean = np.mean(sigma_proj_total, axis=0) #just mean
+        sigma_total.append(sigma_proj_mean)
+
+    sigma_total = np.asarray(sigma_total)
+    sigma_disk_only = np.asarray(sigma_disk_only)
+
+    #sigma_total[sigma_total <= 0] = np.nan # not needed
+
+    median = np.nanpercentile(sigma_total, 50, axis=0)
+    y1     = np.nanpercentile(sigma_total, 80, axis=0)
+    y2     = np.nanpercentile(sigma_total, 20, axis=0)
+
+    median_log = np.where(median > 0, np.log10(median), np.nan)
+    y1_log     = np.where(y1 > 0, np.log10(y1), np.nan)
+    y2_log     = np.where(y2 > 0, np.log10(y2), np.nan)
+
+    median_disk = np.nanpercentile(sigma_disk_only, 50, axis=0)
+    y1_disk     = np.nanpercentile(sigma_disk_only, 100, axis=0)
+    y2_disk     = np.nanpercentile(sigma_disk_only, 0, axis=0)
+
+    median_disk_log = np.where(median_disk > 0, np.log10(median_disk), np.nan)
+    y1_disk_log     = np.where(y1_disk > 0, np.log10(y1_disk), np.nan)
+    y2_disk_log     = np.where(y2_disk > 0, np.log10(y2_disk), np.nan)
+
+    lmbins_mstar = np.array([8.5,10.6])
+    median_profiles_mstar = coco.density.AverageDensityProfiles(density_profiles,galaxies,lmbins_mstar,bin_by_mass='stellar')
+    if hmrange == 'MW':
+        lmbins_mhalo = np.array([11.4,12.4])
+    elif hmrange == 'lower':
+        lmbins_mhalo = np.array([10.7,11.7])
+    median_profiles_mhalo = coco.density.AverageDensityProfiles(density_profiles,galaxies,lmbins_mhalo,bin_by_mass='halo')
+
+    fig,ax = pl.subplots(1,1, figsize=(5,6))
+
+    if task=='plot_accreted':
+        ax.plot(r_mid,median_log,c='b',ls='solid',lw=2, zorder=2,label='This work')
+        ax.fill_between(r_mid,y1_log,y2_log,facecolor='blue', zorder=2,alpha=0.2)
+
+        for ibin in range(median_profiles_mstar.n_mass_bins):
+            xmed,ymed = median_profiles_mstar.acc.median[ibin]
+            xup,yup = median_profiles_mstar.acc.up[ibin]
+            xlp,ylp = median_profiles_mstar.acc.lp[ibin]
+            #ax.plot(xmed, ymed, c='green', label='COCO Mstar selected',lw=2,ls='dashed')
+            #ax.fill_between(xlp,ylp,yup,lw=0,color='green',alpha=0.2)
+
+        for ibin in range(median_profiles_mhalo.n_mass_bins):
+            xmed,ymed = median_profiles_mhalo.acc.median[ibin]
+            xup,yup = median_profiles_mhalo.acc.up[ibin]
+            xlp,ylp = median_profiles_mhalo.acc.lp[ibin]
+            ax.plot(xmed, ymed, c='orange', label='COCO Mhalo selected',lw=2,ls='solid')
+            ax.fill_between(xlp,ylp,yup,lw=0,color='orange',alpha=0.2)
+
+        #pl.title('accreted stellar halo',fontsize=12)
+    elif task=='plot_insitu':
+        ax.plot(r_mid,median_disk_log,c='blue',ls='solid',lw=2,zorder=2,label='face-on disk')
+        ax.fill_between(r_mid,y1_disk_log,y2_disk_log,facecolor='blue', zorder=2,alpha=0.2)
+
+        for ibin in range(median_profiles_mstar.n_mass_bins):
+            xmed,ymed = median_profiles_mstar.ins.median[ibin]
+            xup,yup = median_profiles_mstar.ins.up[ibin]
+            xlp,ylp = median_profiles_mstar.ins.lp[ibin]
+            ax.plot(xmed, ymed, c='green', label='COCO Mstar selected',lw=2,ls='dashed')
+            ax.fill_between(xlp,ylp,yup,lw=0,color='green',alpha=0.2)
+
+        for ibin in range(median_profiles_mhalo.n_mass_bins):
+            xmed,ymed = median_profiles_mhalo.ins.median[ibin]
+            xup,yup = median_profiles_mhalo.ins.up[ibin]
+            xlp,ylp = median_profiles_mhalo.ins.lp[ibin]
+            ax.plot(xmed, ymed, c='orange', label='COCO Mhalo selected',lw=2,ls='solid')
+            ax.fill_between(xlp,ylp,yup,lw=0,color='orange',alpha=0.2)
+
+        #pl.title('in-situ stellar halo',fontsize=12)
+
+    larger_ticks(ax=ax)
+    ax.set_ylim(2,10)
+    ax.set_xlim(-1,2.5)
+    ax.set_xlabel(r'$\log_{10}\,r/\mathrm{kpc}$',fontsize=15)
+    ax.set_ylabel(r'$\log_{10}\,\Sigma_{\star}/\mathrm{M_{\odot}\,kpc^{-2}}$',fontsize=15)
+    ax.legend(frameon=False, fontsize=10)
+    pl.savefig('This_work_vs_coco.pdf',format='pdf')
+    return
+
+def plot_surface_density_profile_with_coco_merger_ratio(star_coor_list,dmstar_list,itree_stream,
+                                                        disk_mass,halo_mass,disk_reff,
+                                                        prog_mstar_list,prog_mhalo_list,prog_tage_list,
+                                                        tree_lbk,r_bins=None,include_disk=False,
+                                                        ratio_type='stellar'):
+    """
+    Split to major/intermediate/minor mergers
+    How if massive progenitors just came in and not destroyed? (like LMC)
+    merger ratio is at the z=infall or z=0? or z=recent?
+    Maybe select recent=5Gyr?8Gyr?
+    The definition of recent major merger within 5Gyr is M(zinfall<5Gyr)/Mhost>major_ratio or
+    M(z=5Gyr)/Mhost>major_ratio? So for zinfall>5Gyr, halos still have M/Mhost>major_ratio also counts?
+
+    The stream data and prog data were recorded together when doing multi-thread,
+    so the itree order is the same.
+    """
+
+    nprofile = len(star_coor_list)
+
+    if r_bins == None:
+        # bin the radius within 1000 kpc
+        r_bins = np.linspace(np.log10(0.1), np.log10(1000),30)
+    else:
+        r_bins = r_bins
+    r_mid = 0.5 * (r_bins[1:] + r_bins[:-1])
+    R_mid = 10**r_mid
+
+    planes=['xy','xz','yz']
+
+    major_itree  = []
+    intermediate_itree = []
+    minor_itree  = []
+    sigma_total  = []
+    sigma_disk_only = []
+
+    for itree in range(nprofile):
+        tree_idx = int(np.where(itree_stream == itree)[0])
+        z0_disk_mass_this_tree = disk_mass[tree_idx][0]
+        z0_disk_reff_this_tree = disk_reff[tree_idx][0]
+        # save itree based on the merger ratio
+        prog_mstar_this_tree = prog_mstar_list[tree_idx]
+        prog_tage_this_tree  = prog_tage_list[tree_idx]
+        # select infall < 8Gyr
+        infall_lbk = prog_tage_this_tree[:,-1]-prog_tage_this_tree[:,0]
+        infall_prog_mstar_this_tree = prog_mstar_this_tree[:,0][infall_lbk<=8]
+        infall_prog_mhalo_this_tree = prog_mhalo_this_tree[:,0][infall_lbk<=8]
+        infall_lbk = infall_lbk[infall_lbk<=8]
+        # find the closest disk,halo mass at infall
+        infall_tree_indices = np.searchsorted(tree_lbk,infall_lbk)
+        infall_disk_mass_this_tree = disk_mass[tree_idx][infall_tree_indices]
+        infall_halo_mass_this_tree = halo_mass[tree_idx][infall_tree_indices]
+
+        if ratio_type=='stellar':
+            merger_ratio = infall_prog_mstar_this_tree/infall_disk_mass_this_tree
+        else:
+            merger_ratio = infall_prog_mhalo_this_tree/infall_halo_mass_this_tree
+        max_ratio = np.max(merger_ratio)
+        if max_ratio >= 0.25:
+            major_itree.append(itree)
+        elif max_ratio >= 0.1:
+            intermediate_itree.append(itree)
+        else:
+            minor_itree.append(itree)
+
+        if include_disk:
+
+            z0_disk_scale_radius, z0_disk_scale_height = disk_scale_radius_height(
+                z0_disk_reff_this_tree
+            )
+            sigma_disk_total = np.array([
+                sigma_exponential_mass_normalized(r, z0_disk_mass_this_tree,
+                                                z0_disk_scale_radius)
+                                                for r in R_mid])
+            sigma_disk_only.append(sigma_disk_total)
+
+        sigma_proj_total = []
+
+        for i in range(3):
+            _, sigma, _ = surface_density_profile(
+                star_coor_list[itree],
+                dmstar_list[itree],
+                r_bins,
+                axis=planes[i]
+            )
+            sigma_proj_total.append(np.asarray(sigma))
+
+        sigma_proj_mean = np.nanmean(sigma_proj_total, axis=0)
+        sigma_total.append(sigma_proj_mean)
+
+    print('number of major/intermediate/minor mergers: ',len(major_itree),len(intermediate_itree),len(minor_itree))
+    sigma_total = np.asarray(sigma_total)
+    sigma_total[sigma_total <= 0] = np.nan
+
+    merger_ratio = [major_itree,intermediate_itree,minor_itree]
+    name_ratio = ['major','intermediate','minor']
+
+    fig,ax = pl.subplots(1,1, figsize=(4,5))
+    for i,mri in enumerate(merger_ratio):
+        median = np.nanpercentile(sigma_total[mri], 50, axis=0)
+        y1     = np.nanpercentile(sigma_total[mri], 80, axis=0)
+        y2     = np.nanpercentile(sigma_total[mri], 20, axis=0)
+
+        median_log = np.where(median > 0, np.log10(median), np.nan)
+        y2_log     = np.where(y2 > 0, np.log10(y2), np.nan)
+        y2_log     = np.where(y2 > 0, np.log10(y2), np.nan)
+        pl.plot(r_mid,median_log,label=name_ratio[i])
+
+    lmbins_mhalo = np.array([11.4,12.4])
+    median_profiles_mhalo = coco.density.AverageDensityProfiles(density_profiles,galaxies,lmbins_mhalo,bin_by_mass='halo')
+    for ibin in range(median_profiles_mhalo.n_mass_bins):
+        xmed,ymed = median_profiles_mhalo.acc.median[ibin]
+        xup,yup = median_profiles_mhalo.acc.up[ibin]
+        xlp,ylp = median_profiles_mhalo.acc.lp[ibin]
+        pl.plot(xmed, ymed, c='orange', label='COCO Mhalo selected',lw=2,ls='solid')
+
+    larger_ticks(ax=ax)
+    pl.ylim(2,10)
+    pl.xlim(-1,2.5)
+    pl.xlabel(r'$\log_{10}\,r/\mathrm{kpc}$',fontsize=15)
+    pl.ylabel(r'$\log_{10}\,\Sigma_{\star}/\mathrm{M_{\odot}\,kpc^{-2}}$',fontsize=15)
+    pl.legend(frameon=False, fontsize=10)
+    return
+
+def plot_surface_density_profile_individual_tree(star_coor_list,dmstar_list,r_bins=None):
     """
     This uses the testing stripping function to represent the stripped mass distribution
     """
-    rs,dms = strip.mass_distribution(mass,coors)
+    m20gals = ['n1042','n1084','n2903','n3351','n1084','n3368','n4220','n4258']
+
     if r_bins == None:
-        # bin the radius within 300 kpc
-        r_bins = np.arange(0,300,50)
+        # bin the radius within 1000 kpc
+        r_bins = np.linspace(-1,5,30)
     else:
         r_bins = r_bins
-    
-    pl.figure()
-    r_mid,sigma = surface_density_profile(np.concatenate(rs),np.concatenate(dms),r_bins)
-    pl.plot(r_mid,sigma,r_bins,c='k',label='total')
-    for dm,r in zip(dms,rs):
-        r_mid,sigma = surface_density_profile(r,dm,r_bins)
-        pl.plot(r_mid,sigma,c='grey',alpha=0.5)
-    pl.xlabel(r'$\log_{10}\,R/\mathrm{kpc}$',fontsize=10)
-    pl.ylabel(r'$\log_{10}\,\Sigma_{\star}/\mathrm{M_{\odot}\,kpc^{-2}}$')
-    pl.legend()
+
+
+    pl.figure(figsize=(10,4))
+    axis=['xy','xz','yz']
+    for i in range(0,3):
+        pl.subplot(1,3,i+1)
+        r_mid,sigma,sigma_each = surface_density_profile(star_coor_list,dmstar_list,r_bins,axis=axis[i])
+
+        pl.plot(r_mid,np.log10(sigma),c='k',label='total')
+        first = True
+        for m20gal in m20gals:
+            m20 = Table.read('/data/apcooper/coco/obs/merritt20/m20_{}_mstar_kpc.csv'.format(m20gal))
+            pl.plot(np.log10(m20['x']),m20['lsmsd'],c='purple',lw=1.5,alpha=0.5,zorder=10,
+                    label='Merritt et al. 2020' if first else None)
+            first = False
+        for s in sigma_each:
+            pl.plot(r_mid,np.log10(s),c='grey',alpha=0.5)
+        pl.title(axis[i])
+        pl.xlim(-1,3)
+        pl.ylim(0,10)
+        if i==0:
+            pl.xlabel(r'$\log_{10}\,R/\mathrm{kpc}$',fontsize=10)
+            pl.ylabel(r'$\log_{10}\,\Sigma_{\star}/\mathrm{M_{\odot}\,kpc^{-2}}$')
+    pl.legend(frameon=False, fontsize=8)
+    pl.tight_layout()
     return
 
-# ChatGPT
-def density_profile(r, m, nbins=50, rmin=None, rmax=None, logbins=True):
+def plot_surface_density_profile_all_tree(star_coor_list,dmstar_list,r_bins=None):
     """
-    Compute spherically averaged density profile.
+    """
+    nprofile = len(star_coor_list)
+
+    m20gals = ['n1042','n1084','n2903','n3351','n1084','n3368','n4220','n4258']
+
+    if r_bins == None:
+        # bin the radius within 1000 kpc
+        r_bins = np.linspace(-1,5,30)
+    else:
+        r_bins = r_bins
+
+    fig,ax = pl.subplots(1,3, figsize=(10,4))
+    planes=['xy','xz','yz']
+    for i in range(0,3):
+        sigma_total = []
+        for itree in range(0,nprofile):
+            r_mid,sigma,_ = surface_density_profile(star_coor_list[itree],dmstar_list[itree],r_bins,axis=planes[i])
+            sigma_total.append(sigma)
+        sigma_total = np.asarray(sigma_total)
+        sigma_total[sigma_total <= 0] = np.nan
+        nvalid = np.sum(np.isfinite(sigma_total), axis=0)
+        median = np.nanpercentile(sigma_total,50,axis=0)
+        y1     = np.nanpercentile(sigma_total,80,axis=0)
+        y2     = np.nanpercentile(sigma_total,20,axis=0)
+        median_log = np.where(median > 0, np.log10(median), np.nan)
+        y1_log     = np.where(y1 > 0, np.log10(y1), np.nan)
+        y2_log     = np.where(y2 > 0, np.log10(y2), np.nan)
+        ax[i].plot(r_mid,median_log,c='b',ls='dashed',label='This Work')
+        ax[i].fill_between(r_mid,y1_log,y2_log,facecolor='cyan', zorder=1,alpha=0.5)
+        first = True
+        for m20gal in m20gals:
+            m20 = Table.read('/data/apcooper/coco/obs/merritt20/m20_{}_mstar_kpc.csv'.format(m20gal))
+            ax[i].plot(np.log10(m20['x']),m20['lsmsd'],c='purple',lw=1.5,alpha=0.5,zorder=10,
+                    label='Merritt et al. 2020' if first else None)
+            first = False
+        ax[i].set_ylim(2,10)
+        ax[i].set_xlim(-1,2.5)
+        ax[i].set_title(planes[i])
+    ax[0].set_xlabel(r'$\log_{10}\,r/\mathrm{kpc}$')
+    ax[0].set_ylabel(r'$\log_{10}\,\Sigma_{\star}/\mathrm{M_{\odot}\,kpc^{-2}}$')
+    ax[0].legend(frameon=False, fontsize=8)
+    return
+
+def plot_surface_density_profile_all_tree_average(star_coor_list,dmstar_list,itree_stream,
+                                                 disk_mass,disk_reff,
+                                                 r_bins=None,include_disk=False,disk='MN',
+                                                 plot_disk='together',coco_style='individual',
+                                                 bin_method='stellar'):
+    """
 
     Parameters
     ----------
-    r : array_like
-        Radii of particles (distance from center).
-    m : array_like
-        Particle masses.
-    nbins : int
-        Number of radial bins.
-    rmin, rmax : float
-        Radial range (optional).
-    logbins : bool
-        Use logarithmic bins if True.
+    include_disk: assuming a face-on MN disk
 
-    Returns
-    -------
-    r_mid : array
-        Bin midpoints.
-    rho : array
-        Density in each shell.
+    Note
+    ----
+    Maybe there is a projection effect in satgen when creating initial infall condition. (need to check)
+    So it is better to average the three projeciton (or more) if showing only one projection.
+    """
+    nprofile = len(star_coor_list)
+
+    # Merritt 2020
+    m20gals = ['n1042','n1084','n2903','n3351','n1084','n3368','n4220','n4258']
+
+
+    if r_bins == None:
+        # bin the radius within 1000 kpc
+        r_bins = np.linspace(np.log10(0.1), np.log10(1000),30)
+    else:
+        r_bins = r_bins
+    r_mid = 0.5 * (r_bins[1:] + r_bins[:-1])
+    R_mid = 10**r_mid
+
+    planes=['xy','xz','yz']
+
+    sigma_total = []
+    sigma_disk_only = []
+
+    for itree in range(nprofile):
+
+        if include_disk:
+            tree_idx = np.where(itree_stream == itree)[0]
+            z0_disk_mass_this_tree = disk_mass[tree_idx][0]
+            z0_disk_reff_this_tree = disk_reff[tree_idx][0]
+
+            z0_disk_scale_radius, z0_disk_scale_height = disk_scale_radius_height(
+                z0_disk_reff_this_tree
+            )
+            if disk=='MN':
+                sigma_disk_total = np.array([
+                    Sigma_faceon(r, z0_disk_mass_this_tree,
+                                z0_disk_scale_radius,
+                                z0_disk_scale_height)
+                                for r in R_mid])
+            elif disk=='exponential':
+                sigma_disk_total = np.array([
+                    sigma_exponential_mass_normalized(r, z0_disk_mass_this_tree,
+                                                     z0_disk_scale_radius)
+                                            for r in R_mid])
+            sigma_disk_only.append(sigma_disk_total)
+
+        sigma_proj_total = []
+
+        for i in range(3):
+            _, sigma, _ = surface_density_profile(
+                star_coor_list[itree],
+                dmstar_list[itree],
+                r_bins,
+                axis=planes[i]
+            )
+            sigma_proj_total.append(np.asarray(sigma))
+
+        sigma_proj_mean = np.nanmean(sigma_proj_total, axis=0)
+
+        if include_disk:
+            if plot_disk=='together':
+                sigma_total.append(sigma_proj_mean + sigma_disk_total)
+            elif plot_disk=='separate':
+                sigma_total.append(sigma_proj_mean)
+        else:
+            sigma_total.append(sigma_proj_mean)
+
+    sigma_total = np.asarray(sigma_total)
+    sigma_disk_only = np.asarray(sigma_disk_only)
+
+    sigma_total[sigma_total <= 0] = np.nan
+
+    median = np.nanpercentile(sigma_total, 50, axis=0)
+    y1     = np.nanpercentile(sigma_total, 80, axis=0)
+    y2     = np.nanpercentile(sigma_total, 20, axis=0)
+
+    median_log = np.where(median > 0, np.log10(median), np.nan)
+    y1_log     = np.where(y1 > 0, np.log10(y1), np.nan)
+    y2_log     = np.where(y2 > 0, np.log10(y2), np.nan)
+
+    median_disk = np.nanpercentile(sigma_disk_only, 50, axis=0)
+    y1_disk     = np.nanpercentile(sigma_disk_only, 80, axis=0)
+    y2_disk     = np.nanpercentile(sigma_disk_only, 20, axis=0)
+
+    median_disk_log = np.where(median_disk > 0, np.log10(median_disk), np.nan)
+    y1_disk_log     = np.where(y1_disk > 0, np.log10(y1_disk), np.nan)
+    y2_disk_log     = np.where(y2_disk > 0, np.log10(y2_disk), np.nan)
+
+    fig,ax = pl.subplots(1,1, figsize=(5,6))
+
+    if include_disk:
+        if plot_disk=='together':
+            label1='This Work+face-on disk'
+        elif plot_disk=='separate':
+            label1='This Work'
+        ax.plot(r_mid,median_log,c='b',ls='dashed',lw=2, zorder=2,label=label1)
+        ax.plot(r_mid,median_disk_log,c='green',ls='dashed',lw=2,zorder=2,label='face-on disk')
+    else:
+        ax.plot(r_mid,median_log,c='b',ls='dashed',lw=2, zorder=2,label='This Work')
+    ax.fill_between(r_mid,y1_log,y2_log,facecolor='blue', zorder=2,alpha=0.2)
+    ax.fill_between(r_mid,y1_disk_log,y2_disk_log,facecolor='green', zorder=2,alpha=0.2)
+
+    first = True
+    for m20gal in m20gals:
+        m20 = Table.read('/data/apcooper/coco/obs/merritt20/m20_{}_mstar_kpc.csv'.format(m20gal))
+        ax.plot(np.log10(m20['x']),m20['lsmsd'],c='purple',lw=1.5,alpha=0.5,zorder=10,
+                label='Merritt et al. 2020' if first else None)
+        first = False
+
+    plot_coco(ax,style=coco_style)
+    larger_ticks(ax=ax)
+    ax.set_ylim(2,10)
+    ax.set_xlim(-1,2.5)
+    ax.set_xlabel(r'$\log_{10}\,r/\mathrm{kpc}$',fontsize=15)
+    ax.set_ylabel(r'$\log_{10}\,\Sigma_{\star}/\mathrm{M_{\odot}\,kpc^{-2}}$',fontsize=15)
+    ax.legend(frameon=False, fontsize=10) #loc=(1.1,0)
+
+    return
+
+def plot_surface_density_profile_all_tree_average_splitting(star_coor_list,dmstar_list,itree_stream,
+                                                            disk_mass,disk_reff,
+                                                            r_bins=None,include_disk=False,disk='MN',
+                                                            bin_method='macc'):
+    """
     """
 
-    r = np.asarray(r)
-    m = np.asarray(m)
+    nprofile = len(star_coor_list)
 
-    if rmin is None:
-        rmin = r[r > 0].min()
-    if rmax is None:
-        rmax = r.max()
+    # Merritt 2020
+    m20gals = ['n1042','n1084','n2903','n3351','n1084','n3368','n4220','n4258']
 
-    if logbins:
-        bins = np.logspace(np.log10(rmin), np.log10(rmax), nbins+1)
+    _,root_mass,_,_ = read_tree()
+    data_path = '/lfs/data/chungwen/SatgenOutput/pchtree_mass_2e11_to_2e12/ludlow_concentration/emerge_disk/cut_both1e7_09_atleast09/'
+    prog_dataset_names = ['orbit','itree','levels_at_tsteps','nprog','prog_masses','prog_mstars','radii','status','t_proc','tage','tsteps']
+    prog = read_hdf5(data_path+'prog_evo_1000_mixed_logmass_EMERGE_disk.hdf5',prog_dataset_names,group='/Results')
+    m_acc    = compute_mass(prog,root_mass,task='m_acc')
+    m_stream = compute_mass(prog,root_mass,task='m_stream')
+    m_both = m_acc+m_stream
+
+    # Create color map
+    #cmap = cm.Blues
+    #norm = mcolors.Normalize(vmin=np.log10(median_profiles.centroids.min()*0.9), 
+    #                     vmax=np.log10(mediif first else Nonean_profiles.centroids.max()*1.1))
+
+    if r_bins == None:
+        # bin the radius within 1000 kpc
+        r_bins = np.linspace(np.log10(0.1), np.log10(1000),30)
     else:
-        bins = np.linspace(rmin, rmax, nbins+1)
+        r_bins = r_bins
+    r_mid = 0.5 * (r_bins[1:] + r_bins[:-1])
+    R_mid = 10**r_mid
 
-    # mass in each radial shell
-    mass_in_shell, edges = np.histogram(r, bins=bins, weights=m)
+    fig,ax = pl.subplots(1,4, figsize=(20,6))
+    planes=['xy','xz','yz']
 
-    r_inner = edges[:-1]
-    r_outer = edges[1:]
+    sigma_total = []
+    sigma_proj = []
+    sigma_disk_only = []
 
-    shell_volume = (4.0/3.0) * np.pi * (r_outer**3 - r_inner**3)
+    for itree in range(nprofile):
 
-    rho = mass_in_shell / shell_volume
-    r_mid = 0.5 * (r_inner + r_outer)
+        if include_disk:
+            tree_idx = np.where(itree_stream == itree)[0]
+            z0_disk_mass_this_tree = disk_mass[tree_idx][0]
+            z0_disk_reff_this_tree = disk_reff[tree_idx][0]
 
-    pl.figure()
-    
-    return r_mid, rho
+            z0_disk_scale_radius, z0_disk_scale_height = disk_scale_radius_height(
+                z0_disk_reff_this_tree
+            )
+            if disk=='MN':
+                sigma_disk_total = np.array([
+                    Sigma_faceon(r, z0_disk_mass_this_tree,
+                                z0_disk_scale_radius,
+                                z0_disk_scale_height)
+                                for r in R_mid])
+            elif disk=='exponential':
+                sigma_disk_total = np.array([
+                    sigma_exponential_mass_normalized(r, z0_disk_mass_this_tree,
+                                                     z0_disk_scale_radius)
+                                                     for r in R_mid])
+            sigma_disk_only.append(sigma_disk_total)
+
+        sigma_proj_total = []
+
+        for i in range(3):
+            _, sigma, _ = surface_density_profile(
+                star_coor_list[itree],
+                dmstar_list[itree],
+                r_bins,
+                axis=planes[i]
+            )
+            sigma_proj_total.append(np.asarray(sigma))
+
+        sigma_proj_mean = np.nanmean(sigma_proj_total, axis=0)
+        sigma_proj.append(sigma_proj_mean)
+
+        sigma_total.append(sigma_proj_mean + sigma_disk_total)
+
+    sigma_total = np.asarray(sigma_total)
+    sigma_proj  = np.asarray(sigma_proj)
+    sigma_disk_only = np.asarray(sigma_disk_only)
+
+    sigma_total[sigma_total <= 0] = np.nan
+    sigma_proj[sigma_proj <= 0] = np.nan
+
+    m_both_split_ranges = [(m_both<=1e8),
+                           (m_both>1e8)&(m_both<=1e9),
+                           (m_both>1e9)&(m_both<=1e10),
+                           (m_both>1e10)]
+    titles = ['[1e8]','[1e8,1e9]','[1e9,1e10]','[1e10]']
+
+    for i,split_range in enumerate(m_both_split_ranges):
+        median = np.nanpercentile(sigma_total[split_range], 50, axis=0)
+        y1     = np.nanpercentile(sigma_total[split_range], 80, axis=0)
+        y2     = np.nanpercentile(sigma_total[split_range], 20, axis=0)
+
+        median_log = np.where(median > 0, np.log10(median), np.nan)
+        y1_log     = np.where(y1 > 0, np.log10(y1), np.nan)
+        y2_log     = np.where(y2 > 0, np.log10(y2), np.nan)
+
+        median_proj = np.nanpercentile(sigma_proj[split_range], 50, axis=0)
+        y1_proj     = np.nanpercentile(sigma_proj[split_range], 80, axis=0)
+        y2_proj     = np.nanpercentile(sigma_proj[split_range], 20, axis=0)
+
+        median_proj_log = np.where(median_proj > 0, np.log10(median_proj), np.nan)
+        y1_proj_log     = np.where(y1_proj > 0, np.log10(y1_proj), np.nan)
+        y2_proj_log     = np.where(y2_proj > 0, np.log10(y2_proj), np.nan)
+
+        median_disk = np.nanpercentile(sigma_disk_only[split_range], 50, axis=0)
+        y1_disk     = np.nanpercentile(sigma_disk_only[split_range], 80, axis=0)
+        y2_disk     = np.nanpercentile(sigma_disk_only[split_range], 20, axis=0)
+
+        median_disk_log = np.where(median_disk > 0, np.log10(median_disk), np.nan)
+        y1_disk_log     = np.where(y1_disk > 0, np.log10(y1_disk), np.nan)
+        y2_disk_log     = np.where(y2_disk > 0, np.log10(y2_disk), np.nan)
+
+        ax[i].plot(r_mid,median_proj_log,c='b',ls='dashed',lw=2, zorder=2,label='This work')
+        ax[i].plot(r_mid,median_log,c='r',ls='dashed',lw=5, zorder=3,label='This work+ disk')
+        ax[i].plot(r_mid,median_disk_log,c='green',ls='dashed',lw=2,zorder=2,label='face-on disk')
+        ax[i].fill_between(r_mid,y1_log,y2_log,facecolor='r', zorder=2,alpha=0.2)
+
+        first = True
+        for m20gal in m20gals:
+            m20 = Table.read('/data/apcooper/coco/obs/merritt20/m20_{}_mstar_kpc.csv'.format(m20gal))
+            ax[i].plot(np.log10(m20['x']),m20['lsmsd'],c='purple',lw=1.5,alpha=0.5,zorder=10,
+                    label='Merritt et al. 2020' if first else None)
+            first = False
+
+        # COCO data
+        plot_coco(ax[i],style='individual')
+
+        ax[i].set_ylim(2,10)
+        ax[i].set_xlim(-1,2.5)
+        ax[i].set_title(titles[i],fontsize=15)
+        larger_ticks(ax=ax[i])
+    ax[0].set_xlabel(r'$\log_{10}\,r/\mathrm{kpc}$',fontsize=15)
+    ax[0].set_ylabel(r'$\log_{10}\,\Sigma_{\star}/\mathrm{M_{\odot}\,kpc^{-2}}$',fontsize=15)
+    ax[0].legend(frameon=False, fontsize=10)
+    pl.tight_layout()
+    return
 #########################################################
 ### check
 ## This place check assumptions or models.
@@ -1733,6 +2643,61 @@ def plot_flattening(itree):
     pl.xlabel('$\mathrm{log_{10}\,disk\,mass\,M_{\odot}}$')
     pl.ylabel('scale radius')
     pl.legend(frameon=False,prop={'size':10})
+    return
+
+def plot_reff_sm(main,sample=1):
+    """
+    The disk data from the Legacy survey was provided by Li-Wen
+
+    Parameters
+    ------
+    sample:
+    1: spectral-z R50
+    2: spectral-z Rmajor-axis
+    3: photo-z    R50
+    4: photo-z    Rmajor-axis
+    """
+
+    Lsurvey_data = fits.open('/data/chungwen/cwt/mass_size_relation/size_mass_pub.fits')
+    reff = main['main_branch_disk_reff']
+    mass = main['main_branch_disk_mass']
+
+    mask = Lsurvey_data[sample].data['err_all'] > 0
+
+    fig,ax = pl.subplots(1,1, figsize=(5,5))
+    pl.scatter(np.log10(mass),np.log10(reff),label='This Work',c='grey',alpha=0.5,s=2)
+    ax.errorbar(Lsurvey_data[sample].data['sm'][mask],
+            Lsurvey_data[sample].data['mu_all'][mask],
+            yerr=Lsurvey_data[sample].data['err_all'][mask],label='Liao 2026')
+    pl.xlabel('$\mathrm{log_{10}\,M_{\star}/\,M_{\odot}}$',fontsize=15)
+    pl.ylabel('$\mathrm{log_{10}\,R/\,kpc}$',fontsize=15)
+    pl.legend(frameon=False,prop={'size':10})
+    return
+
+def check_disk_mean_density(itree_stream,disk_mass,disk_reff):
+    """
+    z0 disk mean density within radius
+    """
+
+    tree_idx = np.where(itree_stream==0)[0]
+    z0_disk_mass_this_tree = disk_mass[tree_idx][0]
+    print('disk mass: ',z0_disk_mass_this_tree)
+    z0_disk_reff_this_tree = disk_reff[tree_idx][0]
+    a,b = disk_scale_radius_height(z0_disk_reff_this_tree)
+    print('scale_radius: ',a,'scale_height: ',b)
+    disk_profile = MN(z0_disk_mass_this_tree,a,b)
+
+    rbins = np.arange(0,30)
+    m = disk_profile.M(rbins)
+
+    pl.plot(np.log10(rbins),np.log10(m))
+    pl.xlabel('$\mathrm{log_{10}\,r/\,kpc}$')
+    pl.ylabel('$\mathrm{log_{10}\,m/\,\mathrm{M_{\odot}}}$')
+    return
+
+def plot_macc_histogram():
+    """
+    """
     return
 #########################################################
 ### debug
