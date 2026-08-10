@@ -518,7 +518,7 @@ class Host():
                 raise ValueError(f"This disk method '{disk_method}' only integrate stellar mass forward.")
 
         # halo growth rate over the dynamical time
-        M_dot_dyn,Rv_dot_dyn,self.tdyn_pf,self.tdyn_cal,self.Rv = calculate_tdyn(self.t_age,self._tree_mass,self.concentration,self.zred,return_lgmass=False)
+        M_dot_dyn,Rv_dot_dyn,self.tdyn_pf,self.tdyn_cal,self.Rv = calculate_tdyn(self.t_age,self.mass,self.concentration,self.zred,return_lgmass=False)
 
 
         # Make a profile for each redshift
