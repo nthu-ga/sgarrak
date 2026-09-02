@@ -472,7 +472,7 @@ class Host():
             self.zred  = self._output_zred
             self.t_age = self.cosmology.age(self._output_zred).value
             self.mass  = np.interp(self.t_age[::-1], self._tree_t_age[::-1], self._tree_mass[::-1])[::-1] 
-
+            # The original tree is in linear space, so it has more bins at high redshifts.
             self._tree_level_to_output_level = np.digitize(self._tree_t_age,self.t_age)
             self._output_level_to_tree_level = np.digitize(self.t_age,self._tree_t_age)
 
